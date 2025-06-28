@@ -73,18 +73,40 @@ class _Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # Derived properties                                                 #
     # ------------------------------------------------------------------ #
-    @validator("db_url", always=True)
-    def _assemble_url(cls, v, values):
-        if v:                                   # already a full DSN
-            return v
-        if values.get("env") == "test":         # pytest overrides later
+    @validator("db_url", pre=True, always=True)
+    def _assemble_db_url(cls, v, values):
+        """Return a full DSN depending on environment if one is not provided."""
+        env = values.get("env")
+        if env == "dev":  # local developer machine (compose defaults)
+            return "postgresql+asyncpg://campfire:campfire@localhost:5432/campfire"
+        if v:
+            return v  # explicit DSN wins
+
+        if env == "test":  # keep existing sqlite default for pytest
             path = Path.cwd() / "test.sqlite"
             return f"sqlite+aiosqlite:///{path}"
+        if env == "dev":   # local developer machine (compose defaults)
+            return "postgresql+asyncpg://campfire:campfire@localhost:5432/campfire"
+
+        # staging / prod -> assemble from individual parts (must be set via env)
         return (
             "postgresql+asyncpg://"
             f"{values['db_user']}:{values['db_password']}"
             f"@{values['db_host']}:{values['db_port']}/{values['db_name']}"
         )
+
+    @validator("redis_url", pre=True, always=True)
+    def _assemble_redis_url(cls, v, values):
+        """Provide sensible default Redis URLs depending on environment."""
+        env = values.get("env")
+        if env == "dev":
+            return "redis://localhost:6379/0"
+        if v:
+            return v
+        if env == "test":
+            return "redis://localhost:6379/1"
+
+        raise ValueError("REDIS_URL must be supplied in non-dev environments")
 
     @property
     def db_dialect(self) -> str:
