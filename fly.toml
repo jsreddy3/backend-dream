@@ -2,9 +2,6 @@ app = "backend-dream"
 
 primary_region = "iad"
 
-[build]
-builtin = "python"
-
 [env]
 ENV              = "prod"
 LOG_LEVEL        = "INFO"
@@ -12,11 +9,7 @@ LOG_LEVEL        = "INFO"
 [deploy]
 release_command = "alembic upgrade head"
 
-# -------- process group: web (FastAPI) ----------
-[experimental]
-  cmd = ["uvicorn", "new_backend_ruminate.main:app",
-         "--host", "0.0.0.0", "--port", "8000"]
-  processes = ["web"]
+# -------- process group definitions ----------
 
 [[services]]
   processes = ["web"]          # expose only web group
@@ -33,5 +26,5 @@ release_command = "alembic upgrade head"
 
 # -------- process group: worker (Celery) --------
 [processes]
-  web    = ""
+  web    = "uvicorn new_backend_ruminate.main:app --host 0.0.0.0 --port 8000"
   worker = "celery -A new_backend_ruminate.worker worker --loglevel=info"

@@ -1,4 +1,4 @@
-# Running the Backend with Video Worker
+# Running the Backend
 
 All commands should be run from the **backend_dream root directory** (`/Users/jaidenreddy/Documents/projects/backend_dream`).
 
