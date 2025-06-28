@@ -1,0 +1,36 @@
+app = "backend-dream"
+
+primary_region = "iad"
+
+[build]
+
+[env]
+ENV              = "prod"
+LOG_LEVEL        = "INFO"
+
+[deploy]
+release_command = "alembic upgrade head"
+
+# -------- process group: web (FastAPI) ----------
+[experimental]
+  cmd = ["uvicorn", "new_backend_ruminate.main:app",
+         "--host", "0.0.0.0", "--port", "8000"]
+  processes = ["web"]
+
+[[services]]
+  processes = ["web"]          # expose only web group
+  internal_port = 8000
+  protocol = "tcp"
+
+  [[services.ports]]
+    port     = 80
+    handlers = ["http"]
+
+  [[services.ports]]
+    port     = 443
+    handlers = ["tls", "http"]
+
+# -------- process group: worker (Celery) --------
+[processes]
+  web    = ""
+  worker = "celery -A new_backend_ruminate.worker worker --loglevel=info"
