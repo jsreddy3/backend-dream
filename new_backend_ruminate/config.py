@@ -58,6 +58,7 @@ class _Settings(BaseSettings):
         default="redis://localhost:6379/0",
         description="Redis URL for Celery broker and result backend"
     )
+    
     api_base_url: str = Field(
         default="http://localhost:8000",
         description="Base URL for worker callbacks to the API"
