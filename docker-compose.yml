@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:16
+    container_name: campfire-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: campfire
+      POSTGRES_USER: campfire
+      POSTGRES_PASSWORD: campfire
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: campfire-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+volumes:
+  pgdata:
+  redisdata:

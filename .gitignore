@@ -1,0 +1,49 @@
+# Python bytecode and compiled files
+__pycache__/
+*.py[cod]
+*.so
+*.dylib
+*.egg
+*.egg-info/
+*.pyd
+pip-wheel-metadata/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+myenv*/
+env/
+
+# Environment & secrets files
+.env
+*.env
+
+# Pytest / coverage
+.pytest_cache/
+.coverage*
+htmlcov/
+
+# Logs & runtime files
+*.log
+*.pid
+*.sqlite
+*.sqlite3
+
+# IDE & editor folders
+.vscode/
+.idea/
+.ipynb_checkpoints/
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Docker volumes (named volumes remain)
+volumes/

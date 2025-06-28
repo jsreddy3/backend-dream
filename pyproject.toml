@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "new_backend_ruminate"
+version = "0.1.0"
+description = "Dream recording backend with video generation"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "sqlalchemy",
+    "alembic",
+    "asyncpg",
+    "starlette",
+    "sse-starlette",
+    "anyio",
+    "aiofiles",
+    "aiohttp",
+    "async-timeout",
+    "click",
+    "email_validator",
+    "httpx",
+    "httpx-sse",
+    "Jinja2",
+    "openai",
+    "python-dotenv",
+    "python-multipart",
+    "pyyaml>=6.0",
+    "typing_extensions",
+    "websockets",
+    "attrs",
+    "annotated-types",
+    "pydantic-settings",
+    "certifi",
+    "boto3",
+    "greenlet",
+    "celery[redis]",
+    "redis",
+    "kombu",
+    "Pillow",
+    "ffmpeg-python",
+    "numpy",
+]
+
+# optional, keeps your test/dev tools out of the main install
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+# let setuptools discover every subpackage automatically
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["new_backend_ruminate*"]
