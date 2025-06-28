@@ -1,13 +1,20 @@
-app = "backend-dream"
+# fly.toml app configuration file generated for backend-dream on 2025-06-28T22:57:44Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-primary_region = "iad"
+app = 'backend-dream'
+primary_region = 'sjc'
 
-[env]
-ENV              = "prod"
-LOG_LEVEL        = "INFO"
+[build]
 
-[deploy]
-release_command = "alembic upgrade head"
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
 
 # -------- process group definitions ----------
 
