@@ -3,6 +3,7 @@ app = "backend-dream"
 primary_region = "iad"
 
 [build]
+builtin = "python"
 
 [env]
 ENV              = "prod"
