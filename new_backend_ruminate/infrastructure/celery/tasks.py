@@ -34,7 +34,7 @@ class VideoGenerationTask(Task):
     bind=True,
     base=VideoGenerationTask,
     name='generate_video',
-    max_retries=3,
+    max_retries=2,
     default_retry_delay=60,  # 1 minute
     retry_backoff=True,
     retry_jitter=True

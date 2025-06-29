@@ -60,7 +60,7 @@ class _Settings(BaseSettings):
     )
     
     api_base_url: str = Field(
-        default="http://localhost:8000",
+        default="https://backend-dream.fly.dev",
         description="Base URL for worker callbacks to the API"
     )
 
