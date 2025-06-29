@@ -11,6 +11,7 @@ from .dream_parser import parse_dream
 from .image_generator import generate_images
 from .audio_generator import generate_audio_with_transcripts
 from .video_compiler import compile_video
+from .memlog import stage
 
 logger = logging.getLogger("uvicorn")
 
@@ -32,7 +33,8 @@ class VideoPipeline:
         # Stage 1: Parse dream into scenes
         logger.info(f"[Job {job_id[:8]}] Stage 1: Parsing dream text ({len(dream_text)} chars)")
         stage1_start = time.time()
-        scenes_data, parse_cost = await parse_dream(dream_text)
+        async with stage("parse-dream"):
+            scenes_data, parse_cost = await parse_dream(dream_text)
         stage1_time = time.time() - stage1_start
         logger.info(f"[Job {job_id[:8]}] ✓ Stage 1 complete in {stage1_time:.1f}s - Generated {len(scenes_data.scenes)} scenes (${parse_cost:.4f})")
         
@@ -52,12 +54,12 @@ class VideoPipeline:
         logger.info(f"[Job {job_id[:8]}] Stage 2&3: Generating images and audio in parallel")
         parallel_start = time.time()
         
-        image_task = generate_images(scenes_data, output_dir)
-        audio_task = generate_audio_with_transcripts(scenes_data, output_dir)
-        
-        (image_paths, image_cost), (audio_data, audio_cost) = await asyncio.gather(
-            image_task, audio_task
-        )
+        async with stage("images+audio"):
+            image_task = generate_images(scenes_data, output_dir)
+            audio_task = generate_audio_with_transcripts(scenes_data, output_dir)
+            (image_paths, image_cost), (audio_data, audio_cost) = await asyncio.gather(
+                image_task, audio_task
+            )
         
         parallel_time = time.time() - parallel_start
         logger.info(f"[Job {job_id[:8]}] ✓ Stage 2&3 complete in {parallel_time:.1f}s")
@@ -70,12 +72,13 @@ class VideoPipeline:
         # Stage 4: Compile video
         logger.info(f"[Job {job_id[:8]}] Stage 4: Compiling video with kinetic subtitles")
         stage4_start = time.time()
-        video_path = await compile_video(
-            scenes_data=scenes_data,
-            image_paths=image_paths,
-            audio_data=audio_data,
-            output_dir=output_dir
-        )
+        async with stage("compile-video"):
+            video_path = await compile_video(
+                scenes_data=scenes_data,
+                image_paths=image_paths,
+                audio_data=audio_data,
+                output_dir=output_dir
+            )
         stage4_time = time.time() - stage4_start
         logger.info(f"[Job {job_id[:8]}] ✓ Stage 4 complete in {stage4_time:.1f}s")
         
@@ -92,8 +95,9 @@ class VideoPipeline:
         
         # Save metadata
         metadata_file = output_dir / "metadata.json"
-        with open(metadata_file, 'w') as f:
-            json.dump(metadata, f, indent=2)
+        async with stage("save-metadata"):
+            with open(metadata_file, 'w') as f:
+                json.dump(metadata, f, indent=2)
         
         total_time = time.time() - pipeline_start
         logger.info(f"[Job {job_id[:8]}] ✅ Pipeline complete in {total_time:.1f}s - Total cost: ${total_cost:.4f}")

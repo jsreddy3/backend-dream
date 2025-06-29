@@ -36,3 +36,4 @@ kombu
 Pillow
 ffmpeg-python
 numpy
+psutil

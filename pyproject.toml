@@ -43,6 +43,8 @@ dependencies = [
     "Pillow",
     "ffmpeg-python",
     "numpy",
+    "psutil",
+    
 ]
 
 # optional, keeps your test/dev tools out of the main install

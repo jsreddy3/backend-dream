@@ -19,7 +19,6 @@ app = FastAPI()
 @app.middleware("http")
 async def _error_logging_middleware(request: Request, call_next):
     try:
-        print("Middleware")
         return await call_next(request)
     except Exception as exc:
         logger.exception("Unhandled exception processing %s %s", request.method, request.url)

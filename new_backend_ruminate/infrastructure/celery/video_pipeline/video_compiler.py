@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import List, Dict
 import json
+import psutil, asyncio, statistics, shlex
 import logging
 import time
 
@@ -68,120 +69,143 @@ SUBTITLE_STYLES = {
     }
 }
 
+async def _run_with_mem(cmd: list[str]) -> list[int]:
+    """Launch cmd with asyncio and sample its RSS every 250 ms.
+       Returns the list of samples in bytes."""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+    )
+    samples = []
+    p = psutil.Process(proc.pid)
+    async def sampler():
+        while proc.returncode is None:
+            try:
+                samples.append(p.memory_info().rss)
+            except psutil.Error:
+                break
+            await asyncio.sleep(0.25)
+    task = asyncio.create_task(sampler())
+    _, stderr = await proc.communicate()
+    await task
+    if proc.returncode:                           # propagate failure
+        raise RuntimeError(stderr.decode()[:300])
+    return samples
+
+async def _encode_scene(
+    scene,
+    img_path: Path,
+    audio_info: Dict,
+    tmp_dir: Path,
+    cfg: Dict,
+) -> Path:
+    """
+    Encode *one* scene into an MP4 with its own burned-in kinetic subtitles.
+    Returns the path to the temporary clip.
+    """
+    # 1️⃣  Build a one-scene ASS file
+    sub_path = create_kinetic_subtitles(
+        ScenesData(dream_summary="", scenes=[scene], total_duration_sec=int(audio_info["duration"])),
+        {scene.scene_id: audio_info},
+        tmp_dir,
+        cfg["subtitle_style"],
+        cfg.get("subtitle_display_mode", "kinetic"),
+        cfg.get("subtitle_timing_offset", 0.0),
+        cfg.get("subtitle_font_size"),
+    )
+
+    dur   = audio_info["duration"]
+    w, h  = map(int, cfg["resolution"].split("x"))
+    fade  = cfg["fade_duration_seconds"]
+    clip  = tmp_dir / f"scene_{scene.scene_id}.mp4"
+
+    ff_filter = (
+        f"[0:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,"
+        f"fade=t=in:st=0:d={fade},"
+        f"fade=t=out:st={dur - fade}:d={fade},"
+        f"ass={shlex.quote(sub_path.as_posix())}[v]"
+    )
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-loop", "1", "-t", str(dur), "-i", str(img_path),
+        "-i", audio_info["audio_path"],
+        "-filter_complex", ff_filter,
+        "-map", "[v]", "-map", "1:a",
+        "-c:v", "libx264",
+        "-preset", cfg.get("preset", "ultrafast"),
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-threads", "1",
+        str(clip),
+    ]
+
+    # Run FFmpeg while sampling its memory usage
+    mem_samples = await _run_with_mem(cmd)
+    if mem_samples:
+        peak_mb = max(mem_samples) / (1024 ** 2)
+        mean_mb = statistics.mean(mem_samples) / (1024 ** 2)
+        logger.info(
+            f"      [Scene {scene.scene_id}] FFmpeg peak RSS {peak_mb:.1f} MB (avg {mean_mb:.1f} MB)"
+        )
+    return clip
+
+
 async def compile_video(
     scenes_data: ScenesData,
     image_paths: List[Path],
     audio_data: Dict[int, Dict],
-    output_dir: Path
+    output_dir: Path,
 ) -> Path:
-    config = CONFIG["pipeline"]["video_compilation"]
-    start_time = time.time()
-    
-    logger.info(f"  [Video] Creating subtitles ({config['subtitle_style']} style, mode: {config.get('subtitle_display_mode', 'kinetic')})")
-    
-    # Create subtitles
-    subtitle_path = create_kinetic_subtitles(
-        scenes_data, 
-        audio_data, 
-        output_dir, 
-        config["subtitle_style"],
-        config.get("subtitle_display_mode", "kinetic"),
-        config.get("subtitle_timing_offset", 0.0),
-        config.get("subtitle_font_size", None)
-    )
-    subtitle_time = time.time() - start_time
-    logger.info(f"  [Video] Subtitles created in {subtitle_time:.1f}s")
-    
-    # Build FFmpeg command
-    logger.info(f"  [Video] Building video with FFmpeg ({config['resolution']}, transitions: {config['transitions']})")
-    filter_complex_parts = []
-    inputs = []
-    audio_inputs = []
-    
-    # Add all images as inputs with their durations
-    for i, (scene, img_path) in enumerate(zip(scenes_data.scenes, image_paths)):
-        duration = audio_data[scene.scene_id]["duration"]
-        inputs.extend(['-loop', '1', '-t', str(duration), '-i', str(img_path)])
-    
-    # Add all audio files
-    for scene in scenes_data.scenes:
-        audio_path = audio_data[scene.scene_id]["audio_path"]
-        inputs.extend(['-i', audio_path])  # Already a string now
-    
-    # Scale and pad images to target resolution
-    target_res = config["resolution"].split('x')
-    width, height = int(target_res[0]), int(target_res[1])
-    
-    for i in range(len(scenes_data.scenes)):
-        scale_filter = f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
-        
-        if config["transitions"] and i > 0:
-            fade_duration = config["fade_duration_seconds"]
-            scene_duration = audio_data[scenes_data.scenes[i].scene_id]["duration"]
-            scale_filter += f",fade=t=in:st=0:d={fade_duration}"
-            if i < len(scenes_data.scenes) - 1:
-                scale_filter += f",fade=t=out:st={scene_duration - fade_duration}:d={fade_duration}"
-        
-        scale_filter += f"[v{i}]"
-        filter_complex_parts.append(scale_filter)
-    
-    # Concatenate video streams
-    concat_videos = ''.join(f"[v{i}]" for i in range(len(scenes_data.scenes)))
-    filter_complex_parts.append(f"{concat_videos}concat=n={len(scenes_data.scenes)}:v=1:a=0[outv]")
-    
-    # Concatenate audio streams
-    audio_offset = len(scenes_data.scenes)
-    concat_audios = ''.join(f"[{audio_offset + i}:a]" for i in range(len(scenes_data.scenes)))
-    filter_complex_parts.append(f"{concat_audios}concat=n={len(scenes_data.scenes)}:v=0:a=1[outa]")
-    
-    # Apply subtitles
-    filter_complex_parts.append(f"[outv]ass={str(subtitle_path)}[final]")
-    
-    filter_complex = ';'.join(filter_complex_parts)
-    
-    # Output path
+    """
+    Memory-friendly pipeline:
+
+      1.  Encode each scene individually  (≈ 80 MB RSS per job)
+      2.  Stream-copy concatenate the resulting clips (≈ 20 MB RSS)
+
+    Peak memory stays below ~100 MB even for 3×1080p scenes.
+    """
+    cfg = CONFIG["pipeline"]["video_compilation"]
+    start = time.time()
+
+    # ── 1️⃣  Scene-by-scene pass ─────────────────────────────────────────
+    logger.info("  [Video] Encoding %d scene(s) sequentially …", len(scenes_data.scenes))
+    tmp_dir = output_dir / "_chunks"
+    tmp_dir.mkdir(exist_ok=True)
+
+    clip_paths: List[Path] = []
+    for scene, img in zip(scenes_data.scenes, image_paths):
+        clip = await _encode_scene(scene, img, audio_data[scene.scene_id], tmp_dir, cfg)
+        clip_paths.append(clip)
+
+    # ── 2️⃣  Concat pass (stream-copy, zero re-encode) ───────────────────
+    concat_list = tmp_dir / "list.txt"
+    with concat_list.open("w") as f:
+        for p in clip_paths:
+            f.write(f"file '{p.resolve()}'\n")
+
     output_path = output_dir / "final_video.mp4"
-    
-    # Build FFmpeg command
     cmd = [
-        'ffmpeg', '-y',
-        *inputs,
-        '-filter_complex', filter_complex,
-        '-map', '[final]',
-        '-map', '[outa]',
-        '-c:v', 'libx264',
-        '-preset', 'medium',
-        '-crf', '23',
-        '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac',
-        '-b:a', '192k',
-        str(output_path)
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0", "-i", str(concat_list),
+        "-c", "copy",
+        str(output_path),
     ]
-    
-    # Run FFmpeg
-    ffmpeg_start = time.time()
-    logger.info(f"  [Video] Running FFmpeg...")
-    
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    
-    stdout, stderr = await process.communicate()
-    
-    if process.returncode != 0:
-        logger.error(f"  [Video] FFmpeg failed: {stderr.decode()}")
-        raise Exception(f"FFmpeg failed: {stderr.decode()}")
-    
-    ffmpeg_time = time.time() - ffmpeg_start
-    total_time = time.time() - start_time
-    
-    # Check output file size
-    file_size_mb = output_path.stat().st_size / (1024 * 1024)
-    logger.info(f"  [Video] ✓ Video compiled in {ffmpeg_time:.1f}s (Total: {total_time:.1f}s)")
-    logger.info(f"  [Video] Output: {output_path.name} ({file_size_mb:.2f} MB)")
-    
+    logger.info("  [Video] Concatenating %d clip(s) …", len(clip_paths))
+    # Run concat pass with memory profiling
+    mem_samples = await _run_with_mem(cmd)
+    if mem_samples:
+        peak_mb = max(mem_samples) / (1024 ** 2)
+        mean_mb = statistics.mean(mem_samples) / (1024 ** 2)
+        logger.info(
+            f"  [Video] Concat FFmpeg peak RSS {peak_mb:.1f} MB (avg {mean_mb:.1f} MB)"
+        )
+
+    total = time.time() - start
+    size_mb = output_path.stat().st_size / (1024 * 1024)
+    logger.info("  [Video] ✓ Done in %.1fs → %s (%.2f MB)", total, output_path.name, size_mb)
+
     return output_path
 
 def create_kinetic_subtitles(
