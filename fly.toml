@@ -34,4 +34,9 @@ primary_region = 'sjc'
 # -------- process group: worker (Celery) --------
 [processes]
   web    = "uvicorn new_backend_ruminate.main:app --host 0.0.0.0 --port 8080"
-  worker = "celery -A new_backend_ruminate.worker worker --loglevel=info"
+  worker = "celery -A new_backend_ruminate.worker worker \
+              --concurrency=1 \
+              --prefetch-multiplier=1 \
+              --max-tasks-per-child=1 \
+              --pool=prefork \
+              --loglevel=info"

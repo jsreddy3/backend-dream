@@ -142,7 +142,12 @@ async def _encode_scene(
     ]
 
     # Run FFmpeg while sampling its memory usage
+    def _cg_mem_mb() -> float:
+        with open("/sys/fs/cgroup/memory.current") as f:
+            return int(f.read()) / (1024**2)
+    logger.info("cgroup before FFmpeg %.0f MB", _cg_mem_mb())
     mem_samples = await _run_with_mem(cmd)
+    logger.info("cgroup after FFmpeg %.0f MB", _cg_mem_mb())
     if mem_samples:
         peak_mb = max(mem_samples) / (1024 ** 2)
         mean_mb = statistics.mean(mem_samples) / (1024 ** 2)
