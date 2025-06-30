@@ -14,6 +14,7 @@ from new_backend_ruminate.dependencies import (
     get_event_hub,
     get_dream_service,
     get_storage_service,
+    get_current_user_id,
 )
 from . import schemas
 from .schemas import (
@@ -22,7 +23,9 @@ from .schemas import (
     UploadUrlResponse, VideoURLResponse,
 )
 
-router = APIRouter(prefix="/dreams", tags=["dreams"])
+router = APIRouter(
+    prefix="/dreams",
+)
 
 # ─────────────────────────────── dreams ─────────────────────────────── #
 
@@ -30,8 +33,9 @@ router = APIRouter(prefix="/dreams", tags=["dreams"])
 async def list_dreams(
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session),
+    user_id: UUID = Depends(get_current_user_id)
 ):
-    dreams = await svc.list_dreams(db)
+    dreams = await svc.list_dreams(user_id, db)
     # Manually serialize to include video_s3_key
     return [DreamRead.model_validate(dream).model_dump() for dream in dreams]
 
@@ -40,16 +44,18 @@ async def create_dream(
     payload: DreamCreate,
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session),
+    user_id: UUID = Depends(get_current_user_id)
 ):
-    return await svc.create_dream(payload, db)
+    return await svc.create_dream(user_id, payload, db)
 
 @router.get("/{did}")
 async def read_dream(
     did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session),
 ):
-    dream = await svc.get_dream(did, db)
+    dream = await svc.get_dream(user_id, did, db)
     if not dream:
         raise HTTPException(404, "Dream not found")
     return DreamRead.model_validate(dream).model_dump()
@@ -58,10 +64,11 @@ async def read_dream(
 async def update_title(
     did: UUID,
     patch: DreamUpdate,
+    user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session),
 ):
-    dream = await svc.update_title(did, patch.title, db)
+    dream = await svc.update_title(user_id, did, patch.title, db)
     if not dream:
         raise HTTPException(404, "Dream not found")
     return DreamRead.model_validate(dream).model_dump()
@@ -69,10 +76,11 @@ async def update_title(
 @router.get("/{did}/transcript", response_model=TranscriptRead)
 async def get_transcript(
     did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session),
 ):
-    txt = await svc.get_transcript(did, db)
+    txt = await svc.get_transcript(user_id, did, db)  # transcript not scoped
     if txt is None:
         raise HTTPException(404, "Dream not found")
     return TranscriptRead(transcript=txt)
@@ -84,10 +92,11 @@ async def add_segment(
     did: UUID,
     seg: AudioSegmentCreate,
     tasks: BackgroundTasks,
+    user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession   = Depends(get_session),
 ):
-    segment = await svc.add_segment(did, seg, db)
+    segment = await svc.add_segment(user_id, did, seg, db)
     # queue background Deepgram transcription
     tasks.add_task(svc.transcribe_segment_and_store, did, segment.id, seg.filename)
     print(f"Returning segment with transcript: {segment.transcript} and id {segment.id}")
@@ -96,20 +105,22 @@ async def add_segment(
 @router.delete("/{did}/segments/{sid}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_segment(
     did: UUID, sid: UUID,
+    user_id: UUID = Depends(get_current_user_id),
     svc: DreamService  = Depends(get_dream_service),
     db: AsyncSession   = Depends(get_session),
 ):
-    ok = await svc.delete_segment(did, sid, db)
+    ok = await svc.delete_segment(user_id, did, sid, db)
     if not ok:
         raise HTTPException(404, "Segment not found")
 
 @router.get("/{did}/segments", response_model=list[AudioSegmentRead])
 async def list_segments(
     did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession   = Depends(get_session),
 ):
-    dream = await svc.get_dream(did, db)
+    dream = await svc.get_dream(user_id, did, db)
     if not dream:
         raise HTTPException(404, "Dream not found")
     return dream.segments
@@ -130,6 +141,7 @@ async def get_upload_url(
     did: UUID,
     filename: str,
     storage: ObjectStorageRepository = Depends(get_storage_service),
+    user_id: UUID = Depends(get_current_user_id),
 ):
     key, url = await storage.generate_presigned_put(did, filename)
     print(f"Generated upload URL {url} with key {key}")
@@ -138,18 +150,20 @@ async def get_upload_url(
 # ─────────────────────── finish & video complete ────────────────────── #
 
 @router.post("/{did}/finish")
-async def finish_dream(did: UUID, svc: DreamService = Depends(get_dream_service)):
-    await svc.finish_dream(did)
+async def finish_dream(did: UUID, user_id: UUID = Depends(get_current_user_id), svc: DreamService = Depends(get_dream_service)):
+    await svc.finish_dream(user_id, did)
     return {"status": "video_queued"}
 
 @router.post("/{did}/video-complete")
 async def video_complete(
     did: UUID, 
     request: schemas.VideoCompleteRequest,
-    svc: DreamService = Depends(get_dream_service)
+    svc: DreamService = Depends(get_dream_service),
+    user_id: UUID = Depends(get_current_user_id),
 ):
     """Handle video generation completion callback from worker."""
     await svc.handle_video_completion(
+        user_id=user_id,
         dream_id=did,
         status=request.status,
         video_url=request.video_url,
@@ -161,10 +175,11 @@ async def video_complete(
 @router.get("/{did}/video-status", response_model=schemas.VideoStatusResponse)
 async def get_video_status(
     did: UUID,
-    svc: DreamService = Depends(get_dream_service)
+    svc: DreamService = Depends(get_dream_service),
+    user_id: UUID = Depends(get_current_user_id)
 ):
     """Get the current status of video generation for a dream."""
-    status_info = await svc.get_video_status(did)
+    status_info = await svc.get_video_status(user_id, did)
     return status_info
 
 @router.get("/{did}/video-url/", response_model=VideoURLResponse)
@@ -172,11 +187,12 @@ async def get_video_url(
     did: UUID,
     svc: DreamService = Depends(get_dream_service),
     storage: ObjectStorageRepository = Depends(get_storage_service),
+    user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Get a presigned URL for video playback."""
     # Get the dream to check if it has a video
-    dream = await svc.get_dream(did, db)
+    dream = await svc.get_dream(user_id, did, db)
     if not dream:
         raise HTTPException(404, "Dream not found")
     

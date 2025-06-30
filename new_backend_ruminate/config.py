@@ -30,6 +30,14 @@ class _Settings(BaseSettings):
     sql_echo: bool = False
 
     # ------------------------------------------------------------------ #
+    # Authentication                                                     #
+    # ------------------------------------------------------------------ #
+    google_ios_client_id: str = Field(..., alias="GOOGLE_IOS_CLIENT_ID")
+    google_web_client_id: str | None = Field(None, alias="GOOGLE_WEB_CLIENT_ID")
+    jwt_secret: str = Field(..., alias="JWT_SECRET")
+    jwt_exp_hours: int = 12
+
+    # ------------------------------------------------------------------ #
     # Object Storage                                                     #
     # ------------------------------------------------------------------ #
     s3_bucket: str = Field(..., alias="S3_BUCKET")

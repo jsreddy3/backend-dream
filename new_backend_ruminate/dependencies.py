@@ -18,6 +18,7 @@ from new_backend_ruminate.infrastructure.sse.hub import EventStreamHub
 from new_backend_ruminate.infrastructure.implementations.conversation.rds_conversation_repository import RDSConversationRepository
 from new_backend_ruminate.infrastructure.implementations.dream.rds_dream_repository import RDSDreamRepository
 from new_backend_ruminate.infrastructure.implementations.object_storage.s3_storage_repository import S3StorageRepository
+from new_backend_ruminate.infrastructure.implementations.user.rds_user_repository import RDSUserRepository
 from new_backend_ruminate.infrastructure.llm.openai_llm import OpenAILLM
 from new_backend_ruminate.services.dream.service import DreamService
 from new_backend_ruminate.services.conversation.service import ConversationService
@@ -28,6 +29,11 @@ from new_backend_ruminate.infrastructure.db.bootstrap import get_session as get_
 from new_backend_ruminate.context.renderers.agent import register_agent_renderers
 from new_backend_ruminate.infrastructure.celery.adapter import CeleryVideoQueueAdapter
 from new_backend_ruminate.domain.ports.video_queue import VideoQueuePort
+from jose import JWTError, jwt
+from uuid import UUID
+from typing import AsyncGenerator
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 register_agent_renderers()
 
@@ -36,6 +42,7 @@ register_agent_renderers()
 _hub = EventStreamHub()
 _conversation_repo = RDSConversationRepository()
 _dream_repo = RDSDreamRepository()
+_user_repo = RDSUserRepository()
 _llm  = OpenAILLM(
     api_key=settings().openai_api_key,
     model=settings().openai_model,
@@ -45,7 +52,7 @@ _conversation_service = ConversationService(_conversation_repo, _llm, _hub, _ctx
 _agent_service = AgentService(_conversation_repo, _llm, _hub, _ctx_builder)
 _storage_service = S3StorageRepository()
 _transcribe = DeepgramTranscriptionService()
-_dream_service = DreamService(_dream_repo, _storage_service, _transcribe, _hub)   # _dream_repo = RDSDreamRepository()
+_dream_service = DreamService(_dream_repo, _storage_service, _user_repo, _transcribe, _hub)   # _dream_repo = RDSDreamRepository()
 _video_queue = CeleryVideoQueueAdapter()
 
 # ─────────────────────── DI provider helpers ───────────────────── #
@@ -69,6 +76,9 @@ def get_agent_service() -> AgentService:
     """Return the singleton AgentService; stateless, safe to share."""
     return _agent_service
 
+def get_user_repository() -> RDSUserRepository:
+    return _user_repo
+
 def get_conversation_repository() -> RDSConversationRepository:
     return _conversation_repo
 
@@ -85,7 +95,36 @@ def get_video_queue() -> VideoQueuePort:
     """Return the singleton video queue adapter."""
     return _video_queue
 
-from typing import AsyncGenerator
+# ───────────────────────── auth helpers ───────────────────────── #
+_security = HTTPBearer()
+
+async def get_current_user(token: HTTPAuthorizationCredentials = Depends(_security)) -> dict:
+    """Decode our own JWT and return its payload (sub, email, exp, …)."""
+    try:
+        payload = jwt.decode(token.credentials, settings().jwt_secret, algorithms=["HS256"])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    print("Token decoded successfully")
+    return payload
+
+async def get_current_user_id(
+    token: HTTPAuthorizationCredentials = Depends(_security),
+    session: AsyncSession = Depends(get_db_session),
+) -> UUID:
+    """Return internal User.id for authenticated JWT; 401 if unknown/invalid."""
+    print("Token received:", token.credentials)
+    try:
+        payload = jwt.decode(token.credentials, settings().jwt_secret, algorithms=["HS256"])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    sub = payload.get("sub")
+    if sub is None:
+        raise HTTPException(status_code=401, detail="Malformed token (no sub)")
+    user = await _user_repo.get_by_sub(sub, session)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unknown user")
+    return user.id
+
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """Request-scoped database session (async).

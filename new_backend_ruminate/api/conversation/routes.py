@@ -7,14 +7,18 @@ from typing import List
 from new_backend_ruminate.api.conversation.schemas import MessageIdsResponse, SendMessageRequest, MessageOut
 from new_backend_ruminate.api.conversation.schemas import ConversationOut, ConversationInitResponse
 from new_backend_ruminate.dependencies import (
-    get_conversation_service, 
+    get_conversation_service,
     get_event_hub,
     get_session,
+    get_current_user,
 )
 from new_backend_ruminate.services.conversation.service import ConversationService
 from new_backend_ruminate.infrastructure.sse.hub import EventStreamHub
 
-router = APIRouter(prefix="/conversations")
+router = APIRouter(
+    prefix="/conversations",
+    dependencies=[Depends(get_current_user)],
+)
 
 @router.post(
     "",

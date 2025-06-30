@@ -18,6 +18,7 @@ from new_backend_ruminate.domain.dream.entities.dream import Dream, DreamStatus
 from new_backend_ruminate.domain.dream.entities.audio_segments import AudioSegment
 from new_backend_ruminate.domain.dream.repo import DreamRepository
 from new_backend_ruminate.domain.object_storage.repo import ObjectStorageRepository
+from new_backend_ruminate.domain.user.repo import UserRepository
 from new_backend_ruminate.domain.ports.transcription import TranscriptionService  # optional
 from new_backend_ruminate.dependencies import EventStreamHub
 
@@ -27,37 +28,40 @@ class DreamService:
         self,
         dream_repo: DreamRepository,
         storage_repo: ObjectStorageRepository,
+        user_repo: UserRepository,
         transcription_svc: Optional[TranscriptionService] = None,
         event_hub: Optional[EventStreamHub] = None,
     ) -> None:
         self._repo = dream_repo
         self._storage = storage_repo
+        self._user_repo = user_repo
         self._transcribe = transcription_svc
         self._hub = event_hub
 
     # ─────────────────────────────── dreams ──────────────────────────────── #
 
-    async def list_dreams(self, session: AsyncSession) -> List[Dream]:
+    async def list_dreams(self, user_id: UUID, session: AsyncSession) -> List[Dream]:
         # user-scoping TBD; for now list all
-        return await self._repo.list_dreams_by_user(None, session)
+        return await self._repo.list_dreams_by_user(user_id, session)
 
-    async def create_dream(self, payload, session: AsyncSession) -> Dream:
+    async def create_dream(self, user_id: UUID, payload, session: AsyncSession) -> Dream:
         dream = Dream(id=payload.id or uuid.uuid4(), title=payload.title)
-        return await self._repo.create_dream(dream, session)
+        return await self._repo.create_dream(user_id, dream, session)
 
-    async def get_dream(self, did: UUID, session: AsyncSession) -> Optional[Dream]:
-        return await self._repo.get_dream(did, session)
+    async def get_dream(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[Dream]:
+        return await self._repo.get_dream(user_id, did, session)
 
-    async def update_title(self, did: UUID, title: str, session: AsyncSession) -> Optional[Dream]:
-        return await self._repo.update_title(None, did, title, session)
+    async def update_title(self, user_id: UUID, did: UUID, title: str, session: AsyncSession) -> Optional[Dream]:
+        return await self._repo.update_title(user_id, did, title, session)
 
-    async def get_transcript(self, did: UUID, session: AsyncSession) -> Optional[str]:
-        return await self._repo.get_transcript(did, session)
+    async def get_transcript(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[str]:
+        return await self._repo.get_transcript(user_id, did, session)
 
     # ───────────────────────────── segments ──────────────────────────────── #
 
     async def add_segment(
         self,
+        user_id: UUID,
         did: UUID,
         seg_payload,
         session: AsyncSession,
@@ -70,14 +74,14 @@ class DreamService:
             order=seg_payload.order,
             s3_key=seg_payload.s3_key,
         )
-        return await self._repo.create_segment(seg, session)
+        return await self._repo.create_segment(user_id, seg, session)
 
-    async def delete_segment(self, did: UUID, sid: UUID, session: AsyncSession) -> bool:
+    async def delete_segment(self, user_id: UUID, did: UUID, sid: UUID, session: AsyncSession) -> bool:
         # need s3 key before deletion
-        segment = await self._repo.get_segment(did, sid, session)
+        segment = await self._repo.get_segment(user_id, did, sid, session)
         if not segment:
             return False
-        await self._repo.delete_segment(did, sid, session)
+        await self._repo.delete_segment(user_id, did, sid, session)
         # best-effort delete from storage
         try:
             await self._storage.delete_object(segment.s3_key)
@@ -94,23 +98,24 @@ class DreamService:
     # Dream finalisation / video                                             #
     # ---------------------------------------------------------------------- #
 
-    async def finish_dream(self, did: UUID) -> None:
+    async def finish_dream(self, user_id: UUID, did: UUID) -> None:
         """Mark dream as completed and kick off video generation async."""
         from new_backend_ruminate.services.video import create_video  # local import to avoid cycle
         # open own session
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         async with session_scope() as session:
-            await self._repo.set_state(None, did, DreamStatus.TRANSCRIBED.value, session)
+            await self._repo.set_state(user_id, did, DreamStatus.TRANSCRIBED.value, session)
         # fire-and-forget video
         asyncio.create_task(create_video(did))
 
-    async def mark_video_complete(self, did: UUID) -> None:
+    async def mark_video_complete(self, user_id: UUID, did: UUID) -> None:
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         async with session_scope() as session:
-            await self._repo.set_state(None, did, DreamStatus.VIDEO_READY.value, session)
+            await self._repo.set_state(user_id, did, DreamStatus.VIDEO_READY.value, session)
     
     async def handle_video_completion(
         self, 
+        user_id: UUID,
         dream_id: UUID,
         status: str,
         video_url: str | None = None,
@@ -123,7 +128,7 @@ class DreamService:
         from datetime import datetime
         
         async with session_scope() as session:
-            dream = await self._repo.get_dream(dream_id, session)
+            dream = await self._repo.get_dream(user_id, dream_id, session)
             if not dream:
                 return
             
@@ -141,14 +146,14 @@ class DreamService:
             
             await session.commit()
     
-    async def get_video_status(self, dream_id: UUID) -> dict:
+    async def get_video_status(self, user_id: UUID, dream_id: UUID) -> dict:
         """Get the current status of video generation for a dream."""
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         from new_backend_ruminate.infrastructure.celery.adapter import CeleryVideoQueueAdapter
         from new_backend_ruminate.domain.dream.entities.dream import VideoStatus
         
         async with session_scope() as session:
-            dream = await self._repo.get_dream(dream_id, session)
+            dream = await self._repo.get_dream(user_id, dream_id, session)
             if not dream:
                 return {"job_id": None, "status": None, "video_url": None}
             
@@ -179,7 +184,7 @@ class DreamService:
     # Background helpers                                                     #
     # ---------------------------------------------------------------------- #
 
-    async def transcribe_segment_and_store(self, did: UUID, sid: UUID, filename: str) -> None:
+    async def transcribe_segment_and_store(self, user_id: UUID, did: UUID, sid: UUID, filename: str) -> None:
         """Background task: get presigned GET URL, call Deepgram, store transcript."""
         if self._transcribe is None:
             return  # transcription disabled in this deployment
@@ -192,7 +197,7 @@ class DreamService:
         print("Transcript: ", transcript)
         if transcript:
             async with session_scope() as session:
-                await self._repo.update_segment_transcript(did, sid, transcript, session)
+                await self._repo.update_segment_transcript(user_id, did, sid, transcript, session)
             if self._hub:
                 await self._hub.publish(
                     stream_id=did,

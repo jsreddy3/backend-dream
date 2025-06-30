@@ -105,6 +105,15 @@ async def init_engine(settings: "Settings") -> None:
     kw = dict(
         echo = settings.sql_echo,
         future = True,
+        # Proactively validate connections at checkout to avoid stale or half-open
+        # sockets ("connection was closed in the middle of operation").  This
+        # runs a lightweight `SELECT 1` before each use and transparently
+        # reconnects if necessary.
+        pool_pre_ping = True,
+        # Close and reopen connections that have been idle for more than
+        # `pool_recycle` seconds to mitigate NAT/firewall timeouts seen on
+        # some networks.
+        pool_recycle = 1800,
     )
 
     if pool_cls is QueuePool:
