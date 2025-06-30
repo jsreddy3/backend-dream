@@ -98,7 +98,7 @@ async def add_segment(
 ):
     segment = await svc.add_segment(user_id, did, seg, db)
     # queue background Deepgram transcription
-    tasks.add_task(svc.transcribe_segment_and_store, did, segment.id, seg.filename)
+    tasks.add_task(svc.transcribe_segment_and_store, user_id, did, segment.id, seg.filename)
     print(f"Returning segment with transcript: {segment.transcript} and id {segment.id}")
     return segment
 

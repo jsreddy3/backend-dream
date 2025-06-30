@@ -11,7 +11,7 @@ from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
 logger = logging.getLogger(__name__)
 
 
-async def create_video(dream_id: UUID):
+async def create_video(user_id: UUID, dream_id: UUID):
     """
     Queue a video generation job for the given dream.
     
@@ -26,7 +26,7 @@ async def create_video(dream_id: UUID):
             dream_repo = RDSDreamRepository()
             
             # Fetch the dream
-            dream = await dream_repo.get_dream(dream_id, session)
+            dream = await dream_repo.get_dream(user_id, dream_id, session)
             if not dream:
                 logger.error(f"Dream {dream_id} not found")
                 return
@@ -62,6 +62,7 @@ async def create_video(dream_id: UUID):
             # Queue the video generation job
             video_queue = CeleryVideoQueueAdapter()
             job_id = await video_queue.enqueue_video_generation(
+                user_id=user_id,
                 dream_id=dream_id,
                 transcript=transcript,
                 segments=segments

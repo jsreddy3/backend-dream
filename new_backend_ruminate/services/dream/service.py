@@ -106,7 +106,7 @@ class DreamService:
         async with session_scope() as session:
             await self._repo.set_state(user_id, did, DreamStatus.TRANSCRIBED.value, session)
         # fire-and-forget video
-        asyncio.create_task(create_video(did))
+        asyncio.create_task(create_video(user_id, did))
 
     async def mark_video_complete(self, user_id: UUID, did: UUID) -> None:
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
@@ -190,11 +190,8 @@ class DreamService:
             return  # transcription disabled in this deployment
 
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
-        print("Generating url")
         key, url = await self._storage.generate_presigned_get(did, filename)
-        print("Transcribing")
         transcript = await self._transcribe.transcribe(url)
-        print("Transcript: ", transcript)
         if transcript:
             async with session_scope() as session:
                 await self._repo.update_segment_transcript(user_id, did, sid, transcript, session)

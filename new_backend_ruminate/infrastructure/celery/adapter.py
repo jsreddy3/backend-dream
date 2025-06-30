@@ -12,6 +12,7 @@ class CeleryVideoQueueAdapter(VideoQueuePort):
     
     async def enqueue_video_generation(
         self, 
+        user_id: UUID,
         dream_id: UUID, 
         transcript: str, 
         segments: List[Dict[str, Any]]
@@ -26,6 +27,7 @@ class CeleryVideoQueueAdapter(VideoQueuePort):
         
         # Send task to Celery queue
         result = generate_video_task.delay(
+            user_id=str(user_id),
             dream_id=str(dream_id),
             transcript=transcript,
             segments=segments
@@ -33,7 +35,7 @@ class CeleryVideoQueueAdapter(VideoQueuePort):
         
         return result.id
     
-    async def get_job_status(self, job_id: str) -> Dict[str, Any]:
+    async def get_job_status(self, user_id: UUID, job_id: str) -> Dict[str, Any]:
         """
         Get the status of a Celery task.
         
@@ -76,7 +78,7 @@ class CeleryVideoQueueAdapter(VideoQueuePort):
         
         return status_info
     
-    async def cancel_job(self, job_id: str) -> bool:
+    async def cancel_job(self, user_id: UUID, job_id: str) -> bool:
         """
         Cancel a Celery task if it hasn't started yet.
         

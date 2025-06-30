@@ -112,17 +112,29 @@ async def get_current_user_id(
     session: AsyncSession = Depends(get_db_session),
 ) -> UUID:
     """Return internal User.id for authenticated JWT; 401 if unknown/invalid."""
-    print("Token received:", token.credentials)
     try:
         payload = jwt.decode(token.credentials, settings().jwt_secret, algorithms=["HS256"])
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    sub = payload.get("sub")
-    if sub is None:
-        raise HTTPException(status_code=401, detail="Malformed token (no sub)")
-    user = await _user_repo.get_by_sub(sub, session)
-    if not user:
+    # Prefer our internal `uid` (primary key) – issued by this API –
+    # fallback to Google `sub` claim for tokens that come directly from Google.
+    uid_str: str | None = payload.get("uid")
+    sub_str: str | None = payload.get("sub")
+
+    user = None
+    if uid_str:
+        try:
+            user = await _user_repo.get_by_id(UUID(uid_str), session)
+        except ValueError:
+            # not a valid UUID, ignore and fall back
+            pass
+
+    if user is None and sub_str:
+        user = await _user_repo.get_by_sub(sub_str, session)
+
+    if user is None:
         raise HTTPException(status_code=401, detail="Unknown user")
+
     return user.id
 
 
