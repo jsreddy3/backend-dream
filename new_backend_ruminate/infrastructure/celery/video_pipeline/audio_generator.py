@@ -185,8 +185,12 @@ async def generate_single_voiceover_with_transcription(
         "speed": speed
     }
     
+    # OpenAI TTS endpoint does not accept an "instructions" param; include
+    # instructions inline if provided.
     if instructions:
-        tts_params["instructions"] = instructions
+        # Prepend instructions as a stage-direction in the prompt so we still
+        # obtain the desired style without breaking the API.
+        tts_params["input"] = f"[{instructions}] {script}"
     
     response = await client.audio.speech.create(**tts_params)
     audio_data = response.read()

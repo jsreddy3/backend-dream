@@ -26,11 +26,12 @@ class CeleryVideoQueueAdapter(VideoQueuePort):
         from .tasks import generate_video_task
         
         # Send task to Celery queue
+        # Pass user_id explicitly so the worker can authenticate callbacks
         result = generate_video_task.delay(
-            user_id=str(user_id),
-            dream_id=str(dream_id),
-            transcript=transcript,
-            segments=segments
+            str(user_id),
+            str(dream_id),
+            transcript,
+            segments,
         )
         
         return result.id

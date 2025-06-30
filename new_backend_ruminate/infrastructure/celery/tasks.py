@@ -14,6 +14,23 @@ from .video_pipeline.orchestrator import VideoPipeline
 
 logger = logging.getLogger(__name__)
 
+from jose import jwt
+from datetime import datetime, timedelta
+
+# ------------------------------------------------------------------ #
+# Service-auth helper
+# ------------------------------------------------------------------ #
+
+def _issue_service_token(uid: str) -> str:
+    """Issue a short-lived JWT signed with the API secret so callbacks authenticate."""
+    exp = datetime.utcnow() + timedelta(hours=6)
+    payload = {
+        "uid": uid,
+        "svc": "video_worker",
+        "exp": exp,
+    }
+    return jwt.encode(payload, settings().jwt_secret, algorithm="HS256")
+
 
 class VideoGenerationTask(Task):
     """
@@ -40,15 +57,17 @@ class VideoGenerationTask(Task):
     retry_jitter=True
 )
 def generate_video_task(
-    self, 
-    dream_id: str, 
-    transcript: str, 
+    self,
+    user_id: str,
+    dream_id: str,
+    transcript: str,
     segments: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
     """
     Celery task that generates a video for a dream.
     
     Args:
+        user_id: UUID of the user (as string)
         dream_id: UUID of the dream (as string)
         transcript: Full transcript text
         segments: List of segment data
@@ -87,8 +106,8 @@ def generate_video_task(
         
         logger.info(f"Video generation completed for dream {dream_id}")
         
-        # Send callback to API
-        asyncio.run(_send_completion_callback(dream_id, video_url, metadata))
+        # Send callback to API – include JWT so API can authenticate
+        asyncio.run(_send_completion_callback(user_id, dream_id, video_url, metadata))
         
         return {
             "status": "completed",
@@ -105,7 +124,7 @@ def generate_video_task(
             raise self.retry(exc=e)
         
         # If all retries exhausted, send failure callback
-        asyncio.run(_send_failure_callback(dream_id, str(e)))
+        asyncio.run(_send_failure_callback(user_id, dream_id, str(e)))
         
         raise
 
@@ -164,11 +183,13 @@ def _upload_video_to_s3(video_path: Path, dream_id: str) -> str:
         raise
 
 
-async def _send_completion_callback(dream_id: str, video_url: str, metadata: Dict[str, Any]):
+async def _send_completion_callback(user_id: str, dream_id: str, video_url: str, metadata: Dict[str, Any]):
     """Send completion callback to the API."""
     callback_url = f"{settings().api_base_url}/dreams/{dream_id}/video-complete"
     
     try:
+        token = _issue_service_token(user_id)
+        headers = {"Authorization": f"Bearer {token}"}
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 callback_url,
@@ -177,6 +198,7 @@ async def _send_completion_callback(dream_id: str, video_url: str, metadata: Dic
                     "metadata": metadata,
                     "status": "completed"
                 },
+                headers=headers,
                 timeout=30
             )
             response.raise_for_status()
@@ -185,11 +207,13 @@ async def _send_completion_callback(dream_id: str, video_url: str, metadata: Dic
         logger.error(f"Failed to send completion callback for dream {dream_id}: {str(e)}")
 
 
-async def _send_failure_callback(dream_id: str, error: str):
+async def _send_failure_callback(user_id: str, dream_id: str, error: str):
     """Send failure callback to the API."""
     callback_url = f"{settings().api_base_url}/dreams/{dream_id}/video-complete"
     
     try:
+        token = _issue_service_token(user_id)
+        headers = {"Authorization": f"Bearer {token}"}
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 callback_url,
@@ -197,6 +221,7 @@ async def _send_failure_callback(dream_id: str, error: str):
                     "status": "failed",
                     "error": error
                 },
+                headers=headers,
                 timeout=30
             )
             response.raise_for_status()
