@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from fastapi.responses import StreamingResponse
+from typing import List
 import logging
 
 from new_backend_ruminate.infrastructure.sse.hub import EventStreamHub

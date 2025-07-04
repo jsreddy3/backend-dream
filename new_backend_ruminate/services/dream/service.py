@@ -182,12 +182,7 @@ Return a JSON object with 'title' and 'summary' fields."""}
         # Prepare the prompt
         messages = [
             {"role": "system", "content": """You are a dream interpretation assistant that helps users gain deeper insights into their dreams. 
-Your task is to generate thoughtful questions about specific elements of the dream that will help uncover personal meanings and connections.
-
-IMPORTANT RULES:
-- Questions should be specific to elements actually mentioned in the dream
-- Questions should encourage self-reflection without being leading
-- Never assume or add details not in the dream"""},
+Your task is to generate thoughtful questions about specific elements of the dream that are necessary to understand the dream."""},
             {"role": "user", "content": f"""Based on this dream, generate {num_questions} insightful questions to help the dreamer explore its meaning.
 
 Dream transcript:

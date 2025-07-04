@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from new_backend_ruminate.domain.user.entities import User
 from new_backend_ruminate.domain.dream.entities.dream import Dream
 from new_backend_ruminate.domain.dream.entities.segments import Segment  # Import to avoid circular dependency
+from new_backend_ruminate.domain.dream.entities.interpretation import InterpretationQuestion, InterpretationChoice, InterpretationAnswer  # Import for relationships
 from new_backend_ruminate.config import settings
 
 async def create_test_data():
