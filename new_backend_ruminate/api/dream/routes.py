@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from fastapi.responses import StreamingResponse
+import logging
 
 from new_backend_ruminate.infrastructure.sse.hub import EventStreamHub
 from new_backend_ruminate.services.dream.service import DreamService
@@ -22,6 +23,8 @@ from .schemas import (
     AudioSegmentCreate, AudioSegmentRead, TranscriptRead,
     UploadUrlResponse, VideoURLResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/dreams",
@@ -96,9 +99,12 @@ async def add_segment(
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession   = Depends(get_session),
 ):
+    logger.info(f"Adding segment to dream {did}: order={seg.order}, filename={seg.filename}")
     segment = await svc.add_segment(user_id, did, seg, db)
+    logger.info(f"Segment {segment.id} created, queuing transcription")
     # queue background Deepgram transcription
     tasks.add_task(svc.transcribe_segment_and_store, user_id, did, segment.id, seg.filename)
+    logger.info(f"Transcription task queued for segment {segment.id}")
     print(f"Returning segment with transcript: {segment.transcript} and id {segment.id}")
     return segment
 
@@ -151,7 +157,9 @@ async def get_upload_url(
 
 @router.post("/{did}/finish")
 async def finish_dream(did: UUID, user_id: UUID = Depends(get_current_user_id), svc: DreamService = Depends(get_dream_service)):
+    logger.info(f"Finish dream endpoint called for dream {did}")
     await svc.finish_dream(user_id, did)
+    logger.info(f"Dream {did} finished, video generation triggered")
     return {"status": "video_queued"}
 
 @router.post("/{did}/video-complete")

@@ -11,6 +11,7 @@ import asyncio
 from typing import Optional, List
 from uuid import UUID
 import json
+import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,8 @@ from new_backend_ruminate.domain.object_storage.repo import ObjectStorageReposit
 from new_backend_ruminate.domain.user.repo import UserRepository
 from new_backend_ruminate.domain.ports.transcription import TranscriptionService  # optional
 from new_backend_ruminate.dependencies import EventStreamHub
+
+logger = logging.getLogger(__name__)
 
 
 class DreamService:
@@ -100,12 +103,27 @@ class DreamService:
 
     async def finish_dream(self, user_id: UUID, did: UUID) -> None:
         """Mark dream as completed and kick off video generation async."""
+        logger.info(f"Finishing dream {did} for user {user_id}")
+        
         from new_backend_ruminate.services.video import create_video  # local import to avoid cycle
         # open own session
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         async with session_scope() as session:
+            # Get the dream to check its state
+            dream = await self._repo.get_dream(user_id, did, session)
+            if dream:
+                logger.info(f"Dream {did} current state: {dream.state}")
+                logger.info(f"Dream {did} has transcript: {bool(dream.transcript)}")
+                logger.info(f"Dream {did} has {len(dream.segments)} segments")
+                if dream.segments:
+                    for i, seg in enumerate(dream.segments):
+                        logger.info(f"  Segment {i}: has_transcript={bool(seg.transcript)}")
+            
             await self._repo.set_state(user_id, did, DreamStatus.TRANSCRIBED.value, session)
+            logger.info(f"Updated dream {did} state to TRANSCRIBED")
+            
         # fire-and-forget video
+        logger.info(f"Triggering video generation for dream {did}")
         asyncio.create_task(create_video(user_id, did))
 
     async def mark_video_complete(self, user_id: UUID, did: UUID) -> None:
@@ -186,21 +204,37 @@ class DreamService:
 
     async def transcribe_segment_and_store(self, user_id: UUID, did: UUID, sid: UUID, filename: str) -> None:
         """Background task: get presigned GET URL, call Deepgram, store transcript."""
+        logger.info(f"Starting transcription for segment {sid} of dream {did}")
+        
         if self._transcribe is None:
+            logger.warning("Transcription service not available, skipping transcription")
             return  # transcription disabled in this deployment
 
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
-        key, url = await self._storage.generate_presigned_get(did, filename)
-        transcript = await self._transcribe.transcribe(url)
-        if transcript:
-            async with session_scope() as session:
-                await self._repo.update_segment_transcript(user_id, did, sid, transcript, session)
-            if self._hub:
-                await self._hub.publish(
-                    stream_id=did,
-                    chunk=json.dumps({
-                        "segment_id": str(sid),
-                        "transcript": transcript,
-                    })
-                )
+        try:
+            key, url = await self._storage.generate_presigned_get(did, filename)
+            logger.info(f"Generated presigned URL for segment {sid}")
+            
+            transcript = await self._transcribe.transcribe(url)
+            logger.info(f"Transcription result for segment {sid}: '{transcript[:100] if transcript else 'None'}...'")
+            
+            if transcript:
+                async with session_scope() as session:
+                    await self._repo.update_segment_transcript(user_id, did, sid, transcript, session)
+                    logger.info(f"Updated segment {sid} transcript in database")
+                    
+                if self._hub:
+                    await self._hub.publish(
+                        stream_id=did,
+                        chunk=json.dumps({
+                            "segment_id": str(sid),
+                            "transcript": transcript,
+                        })
+                    )
+                    logger.info(f"Published transcript to event hub for segment {sid}")
+            else:
+                logger.warning(f"No transcript received for segment {sid}")
+        except Exception as e:
+            logger.error(f"Error transcribing segment {sid}: {str(e)}")
+            raise
                 
