@@ -52,7 +52,7 @@ class VideoGenerationTask(Task):
     base=VideoGenerationTask,
     name='generate_video',
     max_retries=2,
-    default_retry_delay=60,  # 1 minute
+    default_retry_delay=10,  # 10 seconds
     retry_backoff=True,
     retry_jitter=True
 )
@@ -185,7 +185,9 @@ def _upload_video_to_s3(video_path: Path, dream_id: str) -> str:
 
 async def _send_completion_callback(user_id: str, dream_id: str, video_url: str, metadata: Dict[str, Any]):
     """Send completion callback to the API."""
-    callback_url = f"{settings().api_base_url}/dreams/{dream_id}/video-complete"
+    api_base = settings().api_base_url
+    callback_url = f"{api_base}/dreams/{dream_id}/video-complete"
+    logger.info(f"Sending completion callback to: {callback_url}")
     
     try:
         token = _issue_service_token(user_id)
@@ -205,6 +207,8 @@ async def _send_completion_callback(user_id: str, dream_id: str, video_url: str,
             logger.info(f"Successfully sent completion callback for dream {dream_id}")
     except Exception as e:
         logger.error(f"Failed to send completion callback for dream {dream_id}: {str(e)}")
+        logger.error(f"Callback URL was: {callback_url}")
+        logger.error(f"Error details: {type(e).__name__}: {str(e)}")
 
 
 async def _send_failure_callback(user_id: str, dream_id: str, error: str):

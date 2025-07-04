@@ -126,7 +126,18 @@ class RDSDreamRepository(DreamRepository):
         await session.execute(
             update(AudioSegment)
             .where(AudioSegment.id == sid, AudioSegment.dream_id == did, AudioSegment.user_id == user_id)
-            .values(transcript=transcript)
+            .values(transcript=transcript, transcription_status='completed')
+        )
+        await session.commit()
+        return await self.get_segment(user_id, did, sid, session)
+    
+    async def update_segment_transcription_status(
+        self, user_id: UUID, did: UUID, sid: UUID, status: str, session: AsyncSession
+    ) -> Optional[AudioSegment]:
+        await session.execute(
+            update(AudioSegment)
+            .where(AudioSegment.id == sid, AudioSegment.dream_id == did, AudioSegment.user_id == user_id)
+            .values(transcription_status=status)
         )
         await session.commit()
         return await self.get_segment(user_id, did, sid, session)

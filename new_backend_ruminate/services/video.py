@@ -37,18 +37,32 @@ async def create_video(user_id: UUID, dream_id: UUID):
                 return
             
             # Get transcript and segments
+            logger.info(f"Processing dream {dream_id} for video generation")
+            logger.info(f"Dream transcript field: '{dream.transcript}'")
+            logger.info(f"Dream has {len(dream.segments)} segments")
+            
             transcript = dream.transcript or ""
             
             # If no transcript, try to build from segments
             if not transcript and dream.segments:
-                segment_transcripts = [s.transcript for s in dream.segments if s.transcript]
+                logger.info(f"No main transcript, checking {len(dream.segments)} segments...")
+                segment_transcripts = []
+                for i, s in enumerate(dream.segments):
+                    logger.info(f"Segment {i} (order={s.order}): transcript='{s.transcript}', has_transcript={bool(s.transcript)}")
+                    if s.transcript:
+                        segment_transcripts.append(s.transcript)
+                
                 if segment_transcripts:
                     transcript = " ".join(segment_transcripts)
+                    logger.info(f"Built transcript from {len(segment_transcripts)} segments: '{transcript[:100]}...'")
+                else:
+                    logger.warning(f"No segment transcripts found for dream {dream_id}")
             
-            # If still no transcript, use a test placeholder
+            # If still no transcript, raise an error
             if not transcript:
-                logger.warning(f"No transcript found for dream {dream_id}, using test placeholder")
-                transcript = "I had a dream where I was walking through a mysterious forest. The trees were tall and ancient, their branches reaching toward a starlit sky. I felt a sense of peace and wonder as I explored this magical place."
+                error_msg = f"No transcript available for dream {dream_id}. Cannot generate video without transcript."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
             
             segments = [
                 {

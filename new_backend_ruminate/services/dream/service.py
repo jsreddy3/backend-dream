@@ -11,6 +11,7 @@ import asyncio
 from typing import Optional, List
 from uuid import UUID
 import json
+import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,8 @@ from new_backend_ruminate.domain.object_storage.repo import ObjectStorageReposit
 from new_backend_ruminate.domain.user.repo import UserRepository
 from new_backend_ruminate.domain.ports.transcription import TranscriptionService  # optional
 from new_backend_ruminate.dependencies import EventStreamHub
+
+logger = logging.getLogger(__name__)
 
 
 class DreamService:
@@ -73,6 +76,7 @@ class DreamService:
             duration=seg_payload.duration,
             order=seg_payload.order,
             s3_key=seg_payload.s3_key,
+            transcription_status="pending",  # Explicitly set initial status
         )
         return await self._repo.create_segment(user_id, seg, session)
 
@@ -100,12 +104,72 @@ class DreamService:
 
     async def finish_dream(self, user_id: UUID, did: UUID) -> None:
         """Mark dream as completed and kick off video generation async."""
+        logger.info(f"Finishing dream {did} for user {user_id}")
+        
         from new_backend_ruminate.services.video import create_video  # local import to avoid cycle
-        # open own session
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
+        
+        # Wait for all segments to be transcribed
+        max_wait_seconds = 30
+        check_interval = 0.5
+        waited = 0
+        
+        while waited < max_wait_seconds:
+            async with session_scope() as session:
+                dream = await self._repo.get_dream(user_id, did, session)
+                if not dream:
+                    raise ValueError(f"Dream {did} not found")
+                
+                if not dream.segments:
+                    logger.error(f"Dream {did} has no segments")
+                    raise ValueError(f"Dream {did} has no audio segments to generate video from")
+                
+                # Check transcription status of all segments
+                pending_segments = []
+                processing_segments = []
+                failed_segments = []
+                completed_segments = []
+                
+                for i, seg in enumerate(dream.segments):
+                    status = seg.transcription_status
+                    logger.info(f"  Segment {i} (order={seg.order}): status={status}, has_transcript={bool(seg.transcript)}")
+                    
+                    if status == "pending":
+                        pending_segments.append(i)
+                    elif status == "processing":
+                        processing_segments.append(i)
+                    elif status == "failed":
+                        failed_segments.append(i)
+                    elif status == "completed":
+                        completed_segments.append(i)
+                
+                # Check if all segments are done (no pending or processing)
+                if not pending_segments and not processing_segments:
+                    # Check if any failed
+                    if failed_segments:
+                        logger.error(f"Dream {did} has {len(failed_segments)} failed segment(s): {failed_segments}")
+                        raise ValueError(f"Cannot generate video: {len(failed_segments)} segment(s) failed transcription")
+                    
+                    # All segments completed successfully
+                    logger.info(f"All {len(completed_segments)} segments successfully transcribed for dream {did}")
+                    break
+                else:
+                    logger.info(f"Waiting for transcription... {len(pending_segments)} pending, {len(processing_segments)} processing")
+            
+            await asyncio.sleep(check_interval)
+            waited += check_interval
+        
+        if waited >= max_wait_seconds:
+            logger.error(f"Timeout waiting for transcription of dream {did}")
+            raise TimeoutError(f"Transcription did not complete within {max_wait_seconds} seconds")
+        
+        # Update dream state
         async with session_scope() as session:
             await self._repo.set_state(user_id, did, DreamStatus.TRANSCRIBED.value, session)
+            logger.info(f"Updated dream {did} state to TRANSCRIBED")
+            
         # fire-and-forget video
+        logger.info(f"Triggering video generation for dream {did}")
         asyncio.create_task(create_video(user_id, did))
 
     async def mark_video_complete(self, user_id: UUID, did: UUID) -> None:
@@ -186,21 +250,57 @@ class DreamService:
 
     async def transcribe_segment_and_store(self, user_id: UUID, did: UUID, sid: UUID, filename: str) -> None:
         """Background task: get presigned GET URL, call Deepgram, store transcript."""
+        logger.info(f"Starting transcription for segment {sid} of dream {did}")
+        
         if self._transcribe is None:
+            logger.warning("Transcription service not available, skipping transcription")
             return  # transcription disabled in this deployment
 
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
-        key, url = await self._storage.generate_presigned_get(did, filename)
-        transcript = await self._transcribe.transcribe(url)
-        if transcript:
+        
+        # Update status to processing
+        try:
             async with session_scope() as session:
-                await self._repo.update_segment_transcript(user_id, did, sid, transcript, session)
-            if self._hub:
-                await self._hub.publish(
-                    stream_id=did,
-                    chunk=json.dumps({
-                        "segment_id": str(sid),
-                        "transcript": transcript,
-                    })
-                )
+                await self._repo.update_segment_transcription_status(user_id, did, sid, "processing", session)
+                logger.info(f"Updated segment {sid} status to processing")
+        except Exception as e:
+            logger.error(f"Failed to update segment status to processing: {str(e)}")
+        
+        try:
+            key, url = await self._storage.generate_presigned_get(did, filename)
+            logger.info(f"Generated presigned URL for segment {sid}")
+            
+            transcript = await self._transcribe.transcribe(url)
+            logger.info(f"Transcription result for segment {sid}: '{transcript[:100] if transcript else '(empty)'}...'")
+            
+            # Transcript can be empty string - that's still a valid result
+            if transcript is not None:
+                async with session_scope() as session:
+                    # update_segment_transcript now sets status to 'completed' automatically
+                    await self._repo.update_segment_transcript(user_id, did, sid, transcript, session)
+                    logger.info(f"Updated segment {sid} transcript (length: {len(transcript)}) and status to completed")
+                    
+                if self._hub:
+                    await self._hub.publish(
+                        stream_id=did,
+                        chunk=json.dumps({
+                            "segment_id": str(sid),
+                            "transcript": transcript,
+                        })
+                    )
+                    logger.info(f"Published transcript to event hub for segment {sid}")
+            else:
+                # Only mark as failed if transcript is None (actual failure)
+                logger.error(f"Transcription returned None for segment {sid}, marking as failed")
+                async with session_scope() as session:
+                    await self._repo.update_segment_transcription_status(user_id, did, sid, "failed", session)
+        except Exception as e:
+            logger.error(f"Error transcribing segment {sid}: {str(e)}")
+            # Mark as failed on error
+            try:
+                async with session_scope() as session:
+                    await self._repo.update_segment_transcription_status(user_id, did, sid, "failed", session)
+            except Exception as update_error:
+                logger.error(f"Failed to update segment status to failed: {str(update_error)}")
+            raise
                 
