@@ -613,7 +613,7 @@ Create a thoughtful interpretation."""}
                 
                 if not dream.segments:
                     logger.error(f"Dream {did} has no segments")
-                    raise ValueError(f"Dream {did} has no audio segments")
+                    raise ValueError(f"Dream {did} has no segments")
                 
                 # Check transcription status of all segments
                 pending_segments = []
