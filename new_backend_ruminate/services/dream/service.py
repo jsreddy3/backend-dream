@@ -266,10 +266,31 @@ Return a JSON object with 'title' and 'summary' fields."""}
             logger.error(f"Timeout waiting for transcription of dream {did}")
             raise TimeoutError(f"Transcription did not complete within {max_wait_seconds} seconds")
         
-        # Update dream state
+        # Concatenate all segment transcripts and update dream
         async with session_scope() as session:
-            await self._repo.set_state(user_id, did, DreamStatus.TRANSCRIBED.value, session)
-            logger.info(f"Updated dream {did} state to TRANSCRIBED")
+            dream = await self._repo.get_dream(user_id, did, session)
+            if dream and dream.segments:
+                # Sort segments by order and concatenate transcripts
+                sorted_segments = sorted(dream.segments, key=lambda s: s.order)
+                transcript_parts = []
+                
+                for seg in sorted_segments:
+                    if seg.transcript:
+                        transcript_parts.append(seg.transcript)
+                
+                # Join transcripts with space
+                combined_transcript = " ".join(transcript_parts)
+                logger.info(f"Combined {len(transcript_parts)} segment transcripts into dream transcript")
+                
+                # Update dream transcript and state
+                dream.transcript = combined_transcript
+                dream.state = DreamStatus.TRANSCRIBED.value
+                await session.commit()
+                logger.info(f"Updated dream {did} with combined transcript and state to TRANSCRIBED")
+            else:
+                # Just update state if no segments or dream not found
+                await self._repo.set_state(user_id, did, DreamStatus.TRANSCRIBED.value, session)
+                logger.info(f"Updated dream {did} state to TRANSCRIBED")
 
     async def generate_video(self, user_id: UUID, did: UUID) -> None:
         """Generate video for a transcribed dream."""
