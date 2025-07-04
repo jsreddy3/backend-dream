@@ -75,22 +75,44 @@ class DreamService:
     async def update_additional_info(self, user_id: UUID, did: UUID, additional_info: str, session: AsyncSession) -> Optional[Dream]:
         return await self._repo.update_additional_info(user_id, did, additional_info, session)
 
-    async def generate_title_and_summary(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[Dream]:
+    async def generate_title_and_summary(self, user_id: UUID, did: UUID) -> Optional[Dream]:
         """Generate AI title and summary from dream transcript."""
         if not self._summary_llm:
             logger.warning("Summary LLM service not available, cannot generate title and summary")
             return None
         
-        # Get the dream and transcript
-        dream = await self._repo.get_dream(user_id, did, session)
-        if not dream:
-            logger.error(f"Dream {did} not found for user {user_id}")
-            return None
+        from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
+        from new_backend_ruminate.domain.dream.entities.dream import SummaryStatus
         
-        transcript = await self._repo.get_transcript(user_id, did, session)
-        if not transcript:
-            logger.error(f"No transcript available for dream {did}")
-            return None
+        # Try to atomically start summary generation
+        async with session_scope() as session:
+            acquired = await self._repo.try_start_summary_generation(user_id, did, session)
+            if not acquired:
+                logger.info(f"Summary generation already in progress for dream {did}")
+                # Return the dream so caller can see current state
+                return await self._repo.get_dream(user_id, did, session)
+        
+        # Update status to processing
+        try:
+            async with session_scope() as session:
+                await self._repo.update_summary_status(user_id, did, SummaryStatus.PROCESSING, session)
+        except Exception as e:
+            logger.error(f"Failed to update summary status to processing: {str(e)}")
+        
+        # Get the dream and transcript
+        transcript = None
+        async with session_scope() as session:
+            dream = await self._repo.get_dream(user_id, did, session)
+            if not dream:
+                logger.error(f"Dream {did} not found for user {user_id}")
+                await self._repo.update_summary_status(user_id, did, SummaryStatus.FAILED, session)
+                return None
+            
+            transcript = await self._repo.get_transcript(user_id, did, session)
+            if not transcript:
+                logger.error(f"No transcript available for dream {did}")
+                await self._repo.update_summary_status(user_id, did, SummaryStatus.FAILED, session)
+                return None
         
         logger.info(f"Generating title and summary for dream {did}")
         
@@ -141,24 +163,32 @@ Return a JSON object with 'title' and 'summary' fields."""}
             logger.info(f"Generated title: {result.get('title')}, summary length: {len(result.get('summary', ''))}")
             
             # Update the dream with generated title and summary
-            updated_dream = await self._repo.update_title_and_summary(
-                user_id, did, 
-                result['title'], 
-                result['summary'], 
-                session
-            )
-            
-            return updated_dream
+            async with session_scope() as session:
+                updated_dream = await self._repo.update_title_and_summary(
+                    user_id, did, 
+                    result['title'], 
+                    result['summary'], 
+                    session
+                )
+                
+                # Mark summary generation as completed
+                await self._repo.update_summary_status(user_id, did, SummaryStatus.COMPLETED, session)
+                
+                return updated_dream
             
         except Exception as e:
             logger.error(f"Failed to generate title and summary for dream {did}: {str(e)}")
+            try:
+                async with session_scope() as session:
+                    await self._repo.update_summary_status(user_id, did, SummaryStatus.FAILED, session)
+            except Exception as update_error:
+                logger.error(f"Failed to update summary status to failed: {str(update_error)}")
             return None
 
     async def generate_interpretation_questions(
         self, 
         user_id: UUID, 
-        did: UUID, 
-        session: AsyncSession,
+        did: UUID,
         num_questions: int = 3,
         num_choices: int = 3
     ) -> List[InterpretationQuestion]:
@@ -167,21 +197,27 @@ Return a JSON object with 'title' and 'summary' fields."""}
             logger.warning("Question LLM service not available, cannot generate questions")
             return []
         
-        # Get the dream, transcript, and summary
-        dream = await self._repo.get_dream(user_id, did, session)
-        if not dream:
-            logger.error(f"Dream {did} not found for user {user_id}")
-            return []
+        from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         
-        if not dream.transcript:
-            logger.error(f"No transcript available for dream {did}")
-            return []
-        
-        # Check if questions already exist
-        existing_questions = await self._repo.get_interpretation_questions(user_id, did, session)
-        if existing_questions:
-            logger.info(f"Questions already exist for dream {did}, returning existing questions")
-            return existing_questions
+        # Get the dream, transcript, and check for existing questions
+        transcript = None
+        async with session_scope() as session:
+            dream = await self._repo.get_dream(user_id, did, session)
+            if not dream:
+                logger.error(f"Dream {did} not found for user {user_id}")
+                return []
+            
+            if not dream.transcript:
+                logger.error(f"No transcript available for dream {did}")
+                return []
+            
+            transcript = dream.transcript
+            
+            # Check if questions already exist
+            existing_questions = await self._repo.get_interpretation_questions(user_id, did, session)
+            if existing_questions:
+                logger.info(f"Questions already exist for dream {did}, returning existing questions")
+                return existing_questions
         
         logger.info(f"Generating {num_questions} interpretation questions for dream {did}")
         
@@ -192,7 +228,7 @@ Your task is to generate thoughtful questions about specific elements of the dre
             {"role": "user", "content": f"""Based on this dream, generate {num_questions} insightful questions to help the dreamer explore its meaning.
 
 Dream transcript:
-{dream.transcript}
+{transcript}
 
 For each question, also provide {num_choices} possible answer options that you think the dreamer is likely to choose.
 
@@ -274,10 +310,11 @@ Return a JSON array with this structure:
                 questions.append(question)
             
             # Save questions to database
-            saved_questions = await self._repo.create_interpretation_questions(user_id, did, questions, session)
-            logger.info(f"Generated and saved {len(saved_questions)} interpretation questions for dream {did}")
-            
-            return saved_questions
+            async with session_scope() as session:
+                saved_questions = await self._repo.create_interpretation_questions(user_id, did, questions, session)
+                logger.info(f"Generated and saved {len(saved_questions)} interpretation questions for dream {did}")
+                
+                return saved_questions
             
         except Exception as e:
             logger.error(f"Failed to generate interpretation questions for dream {did}: {str(e)}")
@@ -319,8 +356,7 @@ Return a JSON array with this structure:
     async def generate_analysis(
         self, 
         user_id: UUID, 
-        did: UUID, 
-        session: AsyncSession,
+        did: UUID,
         force_regenerate: bool = False
     ) -> Optional[Dream]:
         """Generate comprehensive dream analysis using all available information."""
@@ -328,27 +364,44 @@ Return a JSON array with this structure:
             logger.warning("Analysis LLM service not available, cannot generate analysis")
             return None
         
+        from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
+        
         # Get the dream and all related data
-        dream = await self._repo.get_dream(user_id, did, session)
-        if not dream:
-            logger.error(f"Dream {did} not found for user {user_id}")
-            return None
+        dream = None
+        transcript = None
+        title = None
+        summary = None
+        additional_info = None
+        questions = []
+        answers = []
         
-        # Check if analysis already exists and not forcing regeneration
-        if dream.analysis and not force_regenerate:
-            logger.info(f"Analysis already exists for dream {did}, returning existing analysis")
-            return dream
-        
-        # Validate prerequisites
-        if not dream.transcript:
-            logger.error(f"No transcript available for dream {did}, cannot generate analysis")
-            return None
+        async with session_scope() as session:
+            dream = await self._repo.get_dream(user_id, did, session)
+            if not dream:
+                logger.error(f"Dream {did} not found for user {user_id}")
+                return None
+            
+            # Check if analysis already exists and not forcing regeneration
+            if dream.analysis and not force_regenerate:
+                logger.info(f"Analysis already exists for dream {did}, returning existing analysis")
+                return dream
+            
+            # Validate prerequisites
+            if not dream.transcript:
+                logger.error(f"No transcript available for dream {did}, cannot generate analysis")
+                return None
+            
+            # Extract all needed data while session is open
+            transcript = dream.transcript
+            title = dream.title
+            summary = dream.summary
+            additional_info = dream.additional_info
+            
+            # Get questions and answers
+            questions = await self._repo.get_interpretation_questions(user_id, did, session)
+            answers = await self._repo.get_interpretation_answers(user_id, did, session)
         
         logger.info(f"Generating analysis for dream {did}")
-        
-        # Get questions and answers
-        questions = await self._repo.get_interpretation_questions(user_id, did, session)
-        answers = await self._repo.get_interpretation_answers(user_id, did, session)
         
         # Create a mapping of question_id to answer for easy lookup
         answer_map = {answer.question_id: answer for answer in answers}
@@ -357,11 +410,11 @@ Return a JSON array with this structure:
         context_parts = []
         
         # 1. Basic dream information
-        context_parts.append(f"Dream Title: {dream.title or 'Untitled'}")
-        context_parts.append(f"\nOriginal Dream Transcript:\n{dream.transcript}")
+        context_parts.append(f"Dream Title: {title or 'Untitled'}")
+        context_parts.append(f"\nOriginal Dream Transcript:\n{transcript}")
         
-        if dream.summary:
-            context_parts.append(f"\nSummary:\n{dream.summary}")
+        if summary:
+            context_parts.append(f"\nSummary:\n{summary}")
         
         # 2. Interpretation questions and answers
         if questions:
@@ -385,15 +438,15 @@ Return a JSON array with this structure:
                     context_parts.append("A: (No response provided)")
         
         # 3. Additional information
-        if dream.additional_info:
-            context_parts.append(f"\nAdditional Context:\n{dream.additional_info}")
+        if additional_info:
+            context_parts.append(f"\nAdditional Context:\n{additional_info}")
         
         # Prepare the analysis prompt
         messages = [
             {"role": "system", "content": """You are an expert dream analyst who helps people understand the deeper meanings and insights within their dreams."""},
             {"role": "user", "content": f"""Please provide a comprehensive analysis of this dream based on all the information provided:
 
-{"\n".join(context_parts)}
+{chr(10).join(context_parts)}
 
 Create a thoughtful interpretation."""}
         ]
@@ -412,15 +465,16 @@ Create a thoughtful interpretation."""}
             }
             
             # Save analysis to database
-            updated_dream = await self._repo.update_analysis(
-                user_id, did, 
-                analysis_text, 
-                metadata, 
-                session
-            )
-            
-            logger.info(f"Generated and saved analysis for dream {did}")
-            return updated_dream
+            async with session_scope() as session:
+                updated_dream = await self._repo.update_analysis(
+                    user_id, did, 
+                    analysis_text, 
+                    metadata, 
+                    session
+                )
+                
+                logger.info(f"Generated and saved analysis for dream {did}")
+                return updated_dream
             
         except Exception as e:
             logger.error(f"Failed to generate analysis for dream {did}: {str(e)}")
@@ -570,6 +624,10 @@ Create a thoughtful interpretation."""}
                 # Just update state if no segments or dream not found
                 await self._repo.set_state(user_id, did, DreamStatus.TRANSCRIBED.value, session)
                 logger.info(f"Updated dream {did} state to TRANSCRIBED")
+        
+        # Trigger summary generation after transcription is complete
+        logger.info(f"Triggering summary generation for dream {did}")
+        await self.generate_title_and_summary(user_id, did)
 
     async def generate_video(self, user_id: UUID, did: UUID) -> None:
         """Generate video for a transcribed dream."""
@@ -698,7 +756,7 @@ Create a thoughtful interpretation."""}
             transcript = await self._transcribe.transcribe(url)
             logger.info(f"Transcription result for segment {sid}: '{transcript[:100] if transcript else '(empty)'}...'")
             
-            # Transcript can be empty string - that's still a valid result
+            # treating empty transcript as valid
             if transcript is not None:
                 async with session_scope() as session:
                     # update_segment_transcript now sets status to 'completed' automatically

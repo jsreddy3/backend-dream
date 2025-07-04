@@ -48,6 +48,7 @@ class DreamRead(DreamBase):
     created: datetime
     transcript: Optional[str]
     summary: Optional[str]
+    summary_status: Optional[str]
     additional_info: Optional[str]
     analysis: Optional[str]
     analysis_generated_at: Optional[datetime]

@@ -19,6 +19,12 @@ class VideoStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+class SummaryStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
 class Dream(Base):
     __tablename__ = "dreams"
     id         = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -28,6 +34,7 @@ class Dream(Base):
     created    = Column(DateTime, default=datetime.utcnow)
     title      = Column(String(255), nullable=True)
     summary    = Column(Text, nullable=True)
+    summary_status = Column(String(20), nullable=True)  # SummaryStatus enum
     additional_info = Column(Text, nullable=True)
     
     # Analysis fields

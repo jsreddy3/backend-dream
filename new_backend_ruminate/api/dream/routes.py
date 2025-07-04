@@ -251,12 +251,11 @@ async def generate_summary(
     did: UUID,
     user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
-    db: AsyncSession = Depends(get_session),
 ):
     """Generate AI-powered title and summary from the dream transcript."""
     logger.info(f"Generate summary endpoint called for dream {did}")
     
-    dream = await svc.generate_title_and_summary(user_id, did, db)
+    dream = await svc.generate_title_and_summary(user_id, did)
     if not dream:
         raise HTTPException(400, "Failed to generate summary. Check if transcript is available.")
     
@@ -284,13 +283,12 @@ async def generate_interpretation_questions(
     request: GenerateQuestionsRequest,
     user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
-    db: AsyncSession = Depends(get_session),
 ):
     """Generate interpretation questions for the dream."""
     logger.info(f"Generate questions endpoint called for dream {did}")
     
     questions = await svc.generate_interpretation_questions(
-        user_id, did, db,
+        user_id, did,
         num_questions=request.num_questions,
         num_choices=request.num_choices
     )
@@ -373,13 +371,12 @@ async def generate_analysis(
     request: GenerateAnalysisRequest,
     user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
-    db: AsyncSession = Depends(get_session),
 ):
     """Generate comprehensive dream analysis based on all available information."""
     logger.info(f"Generate analysis endpoint called for dream {did}")
     
     dream = await svc.generate_analysis(
-        user_id, did, db,
+        user_id, did,
         force_regenerate=request.force_regenerate
     )
     

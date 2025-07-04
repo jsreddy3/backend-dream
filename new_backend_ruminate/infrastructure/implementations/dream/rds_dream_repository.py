@@ -8,7 +8,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
-from sqlalchemy import select, update, delete, func, insert
+from sqlalchemy import select, update, delete, func, insert, and_, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 
@@ -214,6 +214,41 @@ class RDSDreamRepository(DreamRepository):
     async def get_status(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[str]:
         dream = await self.get_dream(user_id, did, session)
         return dream.state if dream else None
+    
+    async def update_summary_status(self, user_id: UUID, did: UUID, status: str, session: AsyncSession) -> Optional[Dream]:
+        """Update the summary generation status."""
+        dream = await self.get_dream(user_id, did, session)
+        if dream:
+            dream.summary_status = status
+            await session.commit()
+            await session.refresh(dream)
+        return dream
+    
+    async def try_start_summary_generation(self, user_id: UUID, did: UUID, session: AsyncSession) -> bool:
+        """Atomically try to start summary generation. Returns True if successful, False if already in progress."""
+        from new_backend_ruminate.domain.dream.entities.dream import SummaryStatus
+        
+        # Try to atomically update from None to PENDING
+        stmt = (
+            update(Dream)
+            .where(
+                and_(
+                    Dream.id == did,
+                    Dream.user_id == user_id,
+                    or_(
+                        Dream.summary_status.is_(None),
+                        Dream.summary_status == SummaryStatus.FAILED
+                    )
+                )
+            )
+            .values(summary_status=SummaryStatus.PENDING)
+        )
+        
+        result = await session.execute(stmt)
+        await session.commit()
+        
+        # If we updated a row, we successfully acquired the lock
+        return result.rowcount > 0
     
     # ───────────────────────── interpretation questions ────────────────────────── #
     
