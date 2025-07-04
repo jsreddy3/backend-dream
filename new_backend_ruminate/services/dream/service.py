@@ -12,6 +12,7 @@ from typing import Optional, List
 from uuid import UUID
 import json
 import logging
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -314,6 +315,133 @@ Return a JSON array with this structure:
     async def get_interpretation_answers(self, user_id: UUID, did: UUID, session: AsyncSession) -> List[InterpretationAnswer]:
         """Get all interpretation answers for a dream by the user."""
         return await self._repo.get_interpretation_answers(user_id, did, session)
+
+    async def generate_analysis(
+        self, 
+        user_id: UUID, 
+        did: UUID, 
+        session: AsyncSession,
+        force_regenerate: bool = False
+    ) -> Optional[Dream]:
+        """Generate comprehensive dream analysis using all available information."""
+        if not self._analysis_llm:
+            logger.warning("Analysis LLM service not available, cannot generate analysis")
+            return None
+        
+        # Get the dream and all related data
+        dream = await self._repo.get_dream(user_id, did, session)
+        if not dream:
+            logger.error(f"Dream {did} not found for user {user_id}")
+            return None
+        
+        # Check if analysis already exists and not forcing regeneration
+        if dream.analysis and not force_regenerate:
+            logger.info(f"Analysis already exists for dream {did}, returning existing analysis")
+            return dream
+        
+        # Validate prerequisites
+        if not dream.transcript:
+            logger.error(f"No transcript available for dream {did}, cannot generate analysis")
+            return None
+        
+        logger.info(f"Generating analysis for dream {did}")
+        
+        # Get questions and answers
+        questions = await self._repo.get_interpretation_questions(user_id, did, session)
+        answers = await self._repo.get_interpretation_answers(user_id, did, session)
+        
+        # Create a mapping of question_id to answer for easy lookup
+        answer_map = {answer.question_id: answer for answer in answers}
+        
+        # Build the comprehensive context
+        context_parts = []
+        
+        # 1. Basic dream information
+        context_parts.append(f"Dream Title: {dream.title or 'Untitled'}")
+        context_parts.append(f"\nOriginal Dream Transcript:\n{dream.transcript}")
+        
+        if dream.summary:
+            context_parts.append(f"\nSummary:\n{dream.summary}")
+        
+        # 2. Interpretation questions and answers
+        if questions:
+            context_parts.append("\nInterpretation Questions and Responses:")
+            for question in questions:
+                context_parts.append(f"\nQ: {question.question_text}")
+                
+                if question.id in answer_map:
+                    answer = answer_map[question.id]
+                    if answer.custom_answer:
+                        context_parts.append(f"A: {answer.custom_answer}")
+                    elif answer.selected_choice_id:
+                        # Find the selected choice
+                        selected_choice = next(
+                            (c for c in question.choices if c.id == answer.selected_choice_id),
+                            None
+                        )
+                        if selected_choice:
+                            context_parts.append(f"A: {selected_choice.choice_text}")
+                else:
+                    context_parts.append("A: (No response provided)")
+        
+        # 3. Additional information
+        if dream.additional_info:
+            context_parts.append(f"\nAdditional Context:\n{dream.additional_info}")
+        
+        # Prepare the analysis prompt
+        messages = [
+            {"role": "system", "content": """You are an expert dream analyst who helps people understand the deeper meanings and insights within their dreams. 
+Your approach combines psychological understanding, symbolic interpretation, and personal context to provide meaningful insights.
+
+IMPORTANT GUIDELINES:
+- Base your analysis on the actual dream content and the dreamer's responses
+- Consider both universal symbols and personal associations
+- Be thoughtful and non-prescriptive - offer possibilities rather than definitive answers
+- Connect dream elements to the dreamer's provided context when available
+- Maintain a warm, professional, and insightful tone
+- Avoid making assumptions about the dreamer's life beyond what they've shared
+- Focus on themes, emotions, symbols, and potential personal significance"""},
+            {"role": "user", "content": f"""Please provide a comprehensive analysis of this dream based on all the information provided:
+
+{chr(10).join(context_parts)}
+
+Create a thoughtful interpretation that:
+1. Identifies key themes and symbols in the dream
+2. Explores potential meanings based on the dreamer's responses
+3. Considers emotional undertones and their significance
+4. Connects elements to any personal context shared
+5. Offers insights for self-reflection without being prescriptive
+
+Please write the analysis in a warm, accessible style that invites further reflection."""}
+        ]
+        
+        try:
+            # Generate analysis using the analysis LLM
+            analysis_text = await self._analysis_llm.generate_response(messages)
+            
+            # Prepare metadata
+            metadata = {
+                "model": getattr(self._analysis_llm, '_model', 'unknown'),
+                "generated_at": datetime.utcnow().isoformat(),
+                "has_answers": len(answers) > 0,
+                "num_questions": len(questions),
+                "num_answers": len(answers)
+            }
+            
+            # Save analysis to database
+            updated_dream = await self._repo.update_analysis(
+                user_id, did, 
+                analysis_text, 
+                metadata, 
+                session
+            )
+            
+            logger.info(f"Generated and saved analysis for dream {did}")
+            return updated_dream
+            
+        except Exception as e:
+            logger.error(f"Failed to generate analysis for dream {did}: {str(e)}")
+            return None
 
     # ───────────────────────────── segments ──────────────────────────────── #
 

@@ -27,6 +27,7 @@ from .schemas import (
     GenerateQuestionsRequest, GenerateQuestionsResponse,
     RecordAnswerRequest, InterpretationQuestionRead,
     InterpretationAnswerRead, AdditionalInfoUpdate,
+    GenerateAnalysisRequest, AnalysisResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -363,3 +364,51 @@ async def update_additional_info(
     if not dream:
         raise HTTPException(404, "Dream not found")
     return DreamRead.model_validate(dream).model_dump()
+
+# ───────────────────────── Dream Analysis ─────────────────────────────── #
+
+@router.post("/{did}/generate-analysis", response_model=AnalysisResponse)
+async def generate_analysis(
+    did: UUID,
+    request: GenerateAnalysisRequest,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Generate comprehensive dream analysis based on all available information."""
+    logger.info(f"Generate analysis endpoint called for dream {did}")
+    
+    dream = await svc.generate_analysis(
+        user_id, did, db,
+        force_regenerate=request.force_regenerate
+    )
+    
+    if not dream or not dream.analysis:
+        raise HTTPException(400, "Failed to generate analysis. Check if transcript is available.")
+    
+    return AnalysisResponse(
+        analysis=dream.analysis,
+        generated_at=dream.analysis_generated_at,
+        metadata=dream.analysis_metadata
+    )
+
+@router.get("/{did}/analysis", response_model=AnalysisResponse)
+async def get_analysis(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get the dream analysis if it exists."""
+    dream = await svc.get_dream(user_id, did, db)
+    if not dream:
+        raise HTTPException(404, "Dream not found")
+    
+    if not dream.analysis:
+        raise HTTPException(404, "Analysis not yet generated for this dream")
+    
+    return AnalysisResponse(
+        analysis=dream.analysis,
+        generated_at=dream.analysis_generated_at,
+        metadata=dream.analysis_metadata
+    )

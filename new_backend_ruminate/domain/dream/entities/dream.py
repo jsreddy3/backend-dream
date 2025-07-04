@@ -30,6 +30,11 @@ class Dream(Base):
     summary    = Column(Text, nullable=True)
     additional_info = Column(Text, nullable=True)
     
+    # Analysis fields
+    analysis = Column(Text, nullable=True)
+    analysis_generated_at = Column(DateTime, nullable=True)
+    analysis_metadata = Column(JSON, nullable=True)
+    
     # Video generation fields
     video_job_id     = Column(String(255), nullable=True)  # Celery task ID
     video_status     = Column(String(20), nullable=True)  # VideoStatus enum

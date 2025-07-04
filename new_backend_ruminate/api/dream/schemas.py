@@ -49,6 +49,9 @@ class DreamRead(DreamBase):
     transcript: Optional[str]
     summary: Optional[str]
     additional_info: Optional[str]
+    analysis: Optional[str]
+    analysis_generated_at: Optional[datetime]
+    analysis_metadata: Optional[dict]
     state: str
     segments: List[SegmentRead] = []
     video_url: Optional[str] = None
@@ -161,3 +164,17 @@ class InterpretationAnswerRead(BaseModel):
 
 class AdditionalInfoUpdate(BaseModel):
     additional_info: str
+
+class GenerateAnalysisRequest(BaseModel):
+    force_regenerate: bool = False
+
+class AnalysisResponse(BaseModel):
+    analysis: str
+    generated_at: datetime
+    metadata: Optional[dict] = None
+    
+    model_config = ConfigDict(
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat(timespec="seconds") + "Z"
+        }
+    )
