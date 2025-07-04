@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from fastapi.responses import StreamingResponse
+from typing import List
 import logging
 
 from new_backend_ruminate.infrastructure.sse.hub import EventStreamHub
@@ -23,6 +24,10 @@ from .schemas import (
     SegmentCreate, SegmentRead, TranscriptRead,
     UploadUrlResponse, VideoURLResponse,
     SummaryUpdate, GenerateSummaryResponse,
+    GenerateQuestionsRequest, GenerateQuestionsResponse,
+    RecordAnswerRequest, InterpretationQuestionRead,
+    InterpretationAnswerRead, AdditionalInfoUpdate,
+    GenerateAnalysisRequest, AnalysisResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -270,3 +275,140 @@ async def update_summary_only(
     if not dream:
         raise HTTPException(404, "Dream not found")
     return DreamRead.model_validate(dream).model_dump()
+
+# ───────────────────────── Interpretation Questions ─────────────────────── #
+
+@router.post("/{did}/generate-questions", response_model=GenerateQuestionsResponse)
+async def generate_interpretation_questions(
+    did: UUID,
+    request: GenerateQuestionsRequest,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Generate interpretation questions for the dream."""
+    logger.info(f"Generate questions endpoint called for dream {did}")
+    
+    questions = await svc.generate_interpretation_questions(
+        user_id, did, db,
+        num_questions=request.num_questions,
+        num_choices=request.num_choices
+    )
+    
+    if not questions:
+        raise HTTPException(400, "Failed to generate questions. Check if transcript is available.")
+    
+    return GenerateQuestionsResponse(
+        questions=[InterpretationQuestionRead.model_validate(q) for q in questions]
+    )
+
+@router.get("/{did}/questions", response_model=List[InterpretationQuestionRead])
+async def get_interpretation_questions(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get all interpretation questions for a dream."""
+    questions = await svc.get_interpretation_questions(user_id, did, db)
+    return [InterpretationQuestionRead.model_validate(q) for q in questions]
+
+@router.post("/{did}/answer", response_model=InterpretationAnswerRead)
+async def record_interpretation_answer(
+    did: UUID,
+    request: RecordAnswerRequest,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Record an answer to an interpretation question."""
+    if not request.is_valid:
+        raise HTTPException(400, "Either choice_id or custom_answer must be provided")
+    
+    answer = await svc.record_interpretation_answer(
+        user_id,
+        request.question_id,
+        request.choice_id,
+        request.custom_answer,
+        db
+    )
+    
+    if not answer:
+        raise HTTPException(400, "Failed to record answer")
+    
+    return InterpretationAnswerRead.model_validate(answer)
+
+@router.get("/{did}/answers", response_model=List[InterpretationAnswerRead])
+async def get_interpretation_answers(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get all interpretation answers for a dream by the current user."""
+    answers = await svc.get_interpretation_answers(user_id, did, db)
+    return [InterpretationAnswerRead.model_validate(a) for a in answers]
+
+# ───────────────────────── Additional Info ─────────────────────────────── #
+
+@router.put("/{did}/additional-info")
+async def update_additional_info(
+    did: UUID,
+    info_update: AdditionalInfoUpdate,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Update additional information/notes about the dream."""
+    dream = await svc.update_additional_info(user_id, did, info_update.additional_info, db)
+    if not dream:
+        raise HTTPException(404, "Dream not found")
+    return DreamRead.model_validate(dream).model_dump()
+
+# ───────────────────────── Dream Analysis ─────────────────────────────── #
+
+@router.post("/{did}/generate-analysis", response_model=AnalysisResponse)
+async def generate_analysis(
+    did: UUID,
+    request: GenerateAnalysisRequest,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Generate comprehensive dream analysis based on all available information."""
+    logger.info(f"Generate analysis endpoint called for dream {did}")
+    
+    dream = await svc.generate_analysis(
+        user_id, did, db,
+        force_regenerate=request.force_regenerate
+    )
+    
+    if not dream or not dream.analysis:
+        raise HTTPException(400, "Failed to generate analysis. Check if transcript is available.")
+    
+    return AnalysisResponse(
+        analysis=dream.analysis,
+        generated_at=dream.analysis_generated_at,
+        metadata=dream.analysis_metadata
+    )
+
+@router.get("/{did}/analysis", response_model=AnalysisResponse)
+async def get_analysis(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get the dream analysis if it exists."""
+    dream = await svc.get_dream(user_id, did, db)
+    if not dream:
+        raise HTTPException(404, "Dream not found")
+    
+    if not dream.analysis:
+        raise HTTPException(404, "Analysis not yet generated for this dream")
+    
+    return AnalysisResponse(
+        analysis=dream.analysis,
+        generated_at=dream.analysis_generated_at,
+        metadata=dream.analysis_metadata
+    )

@@ -28,6 +28,12 @@ class Dream(Base):
     created    = Column(DateTime, default=datetime.utcnow)
     title      = Column(String(255), nullable=True)
     summary    = Column(Text, nullable=True)
+    additional_info = Column(Text, nullable=True)
+    
+    # Analysis fields
+    analysis = Column(Text, nullable=True)
+    analysis_generated_at = Column(DateTime, nullable=True)
+    analysis_metadata = Column(JSON, nullable=True)
     
     # Video generation fields
     video_job_id     = Column(String(255), nullable=True)  # Celery task ID
@@ -42,4 +48,11 @@ class Dream(Base):
         back_populates="dream",
         cascade="all, delete-orphan",
         order_by="Segment.order",
+    )
+    
+    interpretation_questions = relationship(
+        "InterpretationQuestion",
+        back_populates="dream",
+        cascade="all, delete-orphan",
+        order_by="InterpretationQuestion.question_order",
     )

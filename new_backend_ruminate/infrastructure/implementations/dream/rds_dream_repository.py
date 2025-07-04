@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import List, Optional, Any
+from datetime import datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from new_backend_ruminate.domain.dream.entities.dream import Dream
 from new_backend_ruminate.domain.dream.entities.segments import Segment
+from new_backend_ruminate.domain.dream.entities.interpretation import InterpretationQuestion, InterpretationChoice, InterpretationAnswer
 from new_backend_ruminate.domain.dream.repo import DreamRepository
 
 
@@ -82,6 +84,32 @@ class RDSDreamRepository(DreamRepository):
             update(Dream)
             .where(Dream.id == did, Dream.user_id == user_id)
             .values(title=title, summary=summary)
+        )
+        await session.commit()
+        return await self.get_dream(user_id, did, session)
+
+    async def update_additional_info(
+        self, user_id: UUID, did: UUID, additional_info: str, session: AsyncSession
+    ) -> Optional[Dream]:
+        await session.execute(
+            update(Dream)
+            .where(Dream.id == did, Dream.user_id == user_id)
+            .values(additional_info=additional_info)
+        )
+        await session.commit()
+        return await self.get_dream(user_id, did, session)
+
+    async def update_analysis(
+        self, user_id: UUID, did: UUID, analysis: str, metadata: dict, session: AsyncSession
+    ) -> Optional[Dream]:
+        await session.execute(
+            update(Dream)
+            .where(Dream.id == did, Dream.user_id == user_id)
+            .values(
+                analysis=analysis,
+                analysis_generated_at=datetime.utcnow(),
+                analysis_metadata=metadata
+            )
         )
         await session.commit()
         return await self.get_dream(user_id, did, session)
@@ -186,3 +214,93 @@ class RDSDreamRepository(DreamRepository):
     async def get_status(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[str]:
         dream = await self.get_dream(user_id, did, session)
         return dream.state if dream else None
+    
+    # ───────────────────────── interpretation questions ────────────────────────── #
+    
+    async def create_interpretation_questions(
+        self, user_id: UUID, did: UUID, questions: List[InterpretationQuestion], session: AsyncSession
+    ) -> List[InterpretationQuestion]:
+        """Create multiple questions with their choices for a dream."""
+        # Verify dream exists and belongs to user
+        dream = await self.get_dream(user_id, did, session)
+        if not dream:
+            raise ValueError(f"Dream {did} not found for user {user_id}")
+        
+        # Add all questions and choices
+        for question in questions:
+            question.dream_id = did
+            session.add(question)
+            # Choices are added automatically due to cascade
+        
+        await session.commit()
+        
+        # Refresh all questions to get their IDs and relationships
+        for question in questions:
+            await session.refresh(question, attribute_names=["choices"])
+        
+        return questions
+    
+    async def get_interpretation_questions(
+        self, user_id: UUID, did: UUID, session: AsyncSession
+    ) -> List[InterpretationQuestion]:
+        """Get all interpretation questions for a dream with their choices."""
+        # Verify dream belongs to user
+        dream = await self.get_dream(user_id, did, session)
+        if not dream:
+            return []
+        
+        result = await session.execute(
+            select(InterpretationQuestion)
+            .where(InterpretationQuestion.dream_id == did)
+            .options(selectinload(InterpretationQuestion.choices))
+            .order_by(InterpretationQuestion.question_order)
+        )
+        return list(result.scalars().all())
+    
+    async def record_interpretation_answer(
+        self, user_id: UUID, answer: InterpretationAnswer, session: AsyncSession
+    ) -> InterpretationAnswer:
+        """Record or update a user's answer to an interpretation question."""
+        # Check if answer already exists (upsert)
+        existing = await session.execute(
+            select(InterpretationAnswer).where(
+                InterpretationAnswer.question_id == answer.question_id,
+                InterpretationAnswer.user_id == user_id
+            )
+        )
+        existing_answer = existing.scalars().first()
+        
+        if existing_answer:
+            # Update existing answer
+            existing_answer.selected_choice_id = answer.selected_choice_id
+            existing_answer.custom_answer = answer.custom_answer
+            existing_answer.answered_at = datetime.utcnow()
+            await session.commit()
+            await session.refresh(existing_answer)
+            return existing_answer
+        else:
+            # Create new answer
+            answer.user_id = user_id
+            session.add(answer)
+            await session.commit()
+            await session.refresh(answer)
+            return answer
+    
+    async def get_interpretation_answers(
+        self, user_id: UUID, did: UUID, session: AsyncSession
+    ) -> List[InterpretationAnswer]:
+        """Get all interpretation answers for a dream by the user."""
+        result = await session.execute(
+            select(InterpretationAnswer)
+            .join(InterpretationQuestion)
+            .where(
+                InterpretationQuestion.dream_id == did,
+                InterpretationAnswer.user_id == user_id
+            )
+            .options(
+                selectinload(InterpretationAnswer.question),
+                selectinload(InterpretationAnswer.selected_choice)
+            )
+            .order_by(InterpretationQuestion.question_order)
+        )
+        return list(result.scalars().all())

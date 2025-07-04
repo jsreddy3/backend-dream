@@ -12,11 +12,13 @@ from typing import Optional, List
 from uuid import UUID
 import json
 import logging
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from new_backend_ruminate.domain.dream.entities.dream import Dream, DreamStatus, VideoStatus
 from new_backend_ruminate.domain.dream.entities.segments import Segment
+from new_backend_ruminate.domain.dream.entities.interpretation import InterpretationQuestion, InterpretationChoice, InterpretationAnswer
 from new_backend_ruminate.domain.dream.repo import DreamRepository
 from new_backend_ruminate.domain.object_storage.repo import ObjectStorageRepository
 from new_backend_ruminate.domain.user.repo import UserRepository
@@ -36,7 +38,8 @@ class DreamService:
         transcription_svc: Optional[TranscriptionService] = None,
         event_hub: Optional[EventStreamHub] = None,
         summary_llm: Optional[LLMService] = None,
-        interpretation_llm: Optional[LLMService] = None,
+        question_llm: Optional[LLMService] = None,
+        analysis_llm: Optional[LLMService] = None,
     ) -> None:
         self._repo = dream_repo
         self._storage = storage_repo
@@ -44,7 +47,8 @@ class DreamService:
         self._transcribe = transcription_svc
         self._hub = event_hub
         self._summary_llm = summary_llm
-        self._interpretation_llm = interpretation_llm
+        self._question_llm = question_llm
+        self._analysis_llm = analysis_llm
 
     # ─────────────────────────────── dreams ──────────────────────────────── #
 
@@ -67,6 +71,9 @@ class DreamService:
 
     async def update_summary(self, user_id: UUID, did: UUID, summary: str, session: AsyncSession) -> Optional[Dream]:
         return await self._repo.update_summary(user_id, did, summary, session)
+
+    async def update_additional_info(self, user_id: UUID, did: UUID, additional_info: str, session: AsyncSession) -> Optional[Dream]:
+        return await self._repo.update_additional_info(user_id, did, additional_info, session)
 
     async def generate_title_and_summary(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[Dream]:
         """Generate AI title and summary from dream transcript."""
@@ -145,6 +152,278 @@ Return a JSON object with 'title' and 'summary' fields."""}
             
         except Exception as e:
             logger.error(f"Failed to generate title and summary for dream {did}: {str(e)}")
+            return None
+
+    async def generate_interpretation_questions(
+        self, 
+        user_id: UUID, 
+        did: UUID, 
+        session: AsyncSession,
+        num_questions: int = 3,
+        num_choices: int = 3
+    ) -> List[InterpretationQuestion]:
+        """Generate interpretation questions with multiple choice answers."""
+        if not self._question_llm:
+            logger.warning("Question LLM service not available, cannot generate questions")
+            return []
+        
+        # Get the dream, transcript, and summary
+        dream = await self._repo.get_dream(user_id, did, session)
+        if not dream:
+            logger.error(f"Dream {did} not found for user {user_id}")
+            return []
+        
+        if not dream.transcript:
+            logger.error(f"No transcript available for dream {did}")
+            return []
+        
+        # Check if questions already exist
+        existing_questions = await self._repo.get_interpretation_questions(user_id, did, session)
+        if existing_questions:
+            logger.info(f"Questions already exist for dream {did}, returning existing questions")
+            return existing_questions
+        
+        logger.info(f"Generating {num_questions} interpretation questions for dream {did}")
+        
+        # Prepare the prompt
+        messages = [
+            {"role": "system", "content": """You are a dream interpretation assistant that helps users gain deeper insights into their dreams. 
+Your task is to generate thoughtful questions about specific elements of the dream that are necessary to understand the dream."""},
+            {"role": "user", "content": f"""Based on this dream, generate {num_questions} insightful questions to help the dreamer explore its meaning.
+
+Dream transcript:
+{dream.transcript}
+
+For each question, also provide {num_choices} possible answer options that you think the dreamer is likely to choose.
+
+Return a JSON array with this structure:
+[
+  {{
+    "question": "The question text",
+    "choices": ["First choice", "Second choice", "Third choice"]
+  }},
+  ...
+]"""}
+        ]
+        
+        # Define the JSON schema
+        json_schema = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "A thoughtful question about a specific element in the dream"
+                    },
+                    "choices": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": num_choices,
+                        "maxItems": num_choices,
+                        "description": "Possible interpretations or meanings"
+                    }
+                },
+                "required": ["question", "choices"]
+            },
+            "minItems": num_questions,
+            "maxItems": num_questions
+        }
+        
+        try:
+            # Generate questions using the question LLM
+            result = await self._question_llm.generate_structured_response(
+                messages=messages,
+                response_format={"type": "json_object"},
+                json_schema={"type": "object", "properties": {"questions": json_schema}, "required": ["questions"]}
+            )
+            
+            # Extract questions array (handle both direct array and wrapped object)
+            questions_data = result.get("questions", result) if isinstance(result, dict) else result
+            if not isinstance(questions_data, list):
+                logger.error(f"Invalid response format from LLM: {result}")
+                return []
+            
+            # Create question entities
+            questions = []
+            for idx, q_data in enumerate(questions_data):
+                question = InterpretationQuestion(
+                    dream_id=did,
+                    question_text=q_data["question"],
+                    question_order=idx + 1
+                )
+                
+                # Add choices
+                question.choices = []
+                for choice_idx, choice_text in enumerate(q_data["choices"]):
+                    choice = InterpretationChoice(
+                        choice_text=choice_text,
+                        choice_order=choice_idx + 1,
+                        is_custom=False
+                    )
+                    question.choices.append(choice)
+                
+                # Add custom answer option
+                custom_choice = InterpretationChoice(
+                    choice_text="Other (please specify)",
+                    choice_order=len(q_data["choices"]) + 1,
+                    is_custom=True
+                )
+                question.choices.append(custom_choice)
+                
+                questions.append(question)
+            
+            # Save questions to database
+            saved_questions = await self._repo.create_interpretation_questions(user_id, did, questions, session)
+            logger.info(f"Generated and saved {len(saved_questions)} interpretation questions for dream {did}")
+            
+            return saved_questions
+            
+        except Exception as e:
+            logger.error(f"Failed to generate interpretation questions for dream {did}: {str(e)}")
+            return []
+
+    async def record_interpretation_answer(
+        self,
+        user_id: UUID,
+        question_id: UUID,
+        choice_id: Optional[UUID],
+        custom_answer: Optional[str],
+        session: AsyncSession
+    ) -> Optional[InterpretationAnswer]:
+        """Record a user's answer to an interpretation question."""
+        # Create answer entity
+        answer = InterpretationAnswer(
+            question_id=question_id,
+            user_id=user_id,
+            selected_choice_id=choice_id,
+            custom_answer=custom_answer
+        )
+        
+        try:
+            saved_answer = await self._repo.record_interpretation_answer(user_id, answer, session)
+            logger.info(f"Recorded answer for question {question_id} by user {user_id}")
+            return saved_answer
+        except Exception as e:
+            logger.error(f"Failed to record answer: {str(e)}")
+            return None
+
+    async def get_interpretation_questions(self, user_id: UUID, did: UUID, session: AsyncSession) -> List[InterpretationQuestion]:
+        """Get all interpretation questions for a dream."""
+        return await self._repo.get_interpretation_questions(user_id, did, session)
+
+    async def get_interpretation_answers(self, user_id: UUID, did: UUID, session: AsyncSession) -> List[InterpretationAnswer]:
+        """Get all interpretation answers for a dream by the user."""
+        return await self._repo.get_interpretation_answers(user_id, did, session)
+
+    async def generate_analysis(
+        self, 
+        user_id: UUID, 
+        did: UUID, 
+        session: AsyncSession,
+        force_regenerate: bool = False
+    ) -> Optional[Dream]:
+        """Generate comprehensive dream analysis using all available information."""
+        if not self._analysis_llm:
+            logger.warning("Analysis LLM service not available, cannot generate analysis")
+            return None
+        
+        # Get the dream and all related data
+        dream = await self._repo.get_dream(user_id, did, session)
+        if not dream:
+            logger.error(f"Dream {did} not found for user {user_id}")
+            return None
+        
+        # Check if analysis already exists and not forcing regeneration
+        if dream.analysis and not force_regenerate:
+            logger.info(f"Analysis already exists for dream {did}, returning existing analysis")
+            return dream
+        
+        # Validate prerequisites
+        if not dream.transcript:
+            logger.error(f"No transcript available for dream {did}, cannot generate analysis")
+            return None
+        
+        logger.info(f"Generating analysis for dream {did}")
+        
+        # Get questions and answers
+        questions = await self._repo.get_interpretation_questions(user_id, did, session)
+        answers = await self._repo.get_interpretation_answers(user_id, did, session)
+        
+        # Create a mapping of question_id to answer for easy lookup
+        answer_map = {answer.question_id: answer for answer in answers}
+        
+        # Build the comprehensive context
+        context_parts = []
+        
+        # 1. Basic dream information
+        context_parts.append(f"Dream Title: {dream.title or 'Untitled'}")
+        context_parts.append(f"\nOriginal Dream Transcript:\n{dream.transcript}")
+        
+        if dream.summary:
+            context_parts.append(f"\nSummary:\n{dream.summary}")
+        
+        # 2. Interpretation questions and answers
+        if questions:
+            context_parts.append("\nInterpretation Questions and Responses:")
+            for question in questions:
+                context_parts.append(f"\nQ: {question.question_text}")
+                
+                if question.id in answer_map:
+                    answer = answer_map[question.id]
+                    if answer.custom_answer:
+                        context_parts.append(f"A: {answer.custom_answer}")
+                    elif answer.selected_choice_id:
+                        # Find the selected choice
+                        selected_choice = next(
+                            (c for c in question.choices if c.id == answer.selected_choice_id),
+                            None
+                        )
+                        if selected_choice:
+                            context_parts.append(f"A: {selected_choice.choice_text}")
+                else:
+                    context_parts.append("A: (No response provided)")
+        
+        # 3. Additional information
+        if dream.additional_info:
+            context_parts.append(f"\nAdditional Context:\n{dream.additional_info}")
+        
+        # Prepare the analysis prompt
+        messages = [
+            {"role": "system", "content": """You are an expert dream analyst who helps people understand the deeper meanings and insights within their dreams."""},
+            {"role": "user", "content": f"""Please provide a comprehensive analysis of this dream based on all the information provided:
+
+{"\n".join(context_parts)}
+
+Create a thoughtful interpretation."""}
+        ]
+        
+        try:
+            # Generate analysis using the analysis LLM
+            analysis_text = await self._analysis_llm.generate_response(messages)
+            
+            # Prepare metadata
+            metadata = {
+                "model": getattr(self._analysis_llm, '_model', 'unknown'),
+                "generated_at": datetime.utcnow().isoformat(),
+                "has_answers": len(answers) > 0,
+                "num_questions": len(questions),
+                "num_answers": len(answers)
+            }
+            
+            # Save analysis to database
+            updated_dream = await self._repo.update_analysis(
+                user_id, did, 
+                analysis_text, 
+                metadata, 
+                session
+            )
+            
+            logger.info(f"Generated and saved analysis for dream {did}")
+            return updated_dream
+            
+        except Exception as e:
+            logger.error(f"Failed to generate analysis for dream {did}: {str(e)}")
             return None
 
     # ───────────────────────────── segments ──────────────────────────────── #
