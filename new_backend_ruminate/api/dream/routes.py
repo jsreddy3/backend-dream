@@ -23,6 +23,9 @@ from .schemas import (
     SegmentCreate, SegmentRead, TranscriptRead,
     UploadUrlResponse, VideoURLResponse,
     SummaryUpdate, GenerateSummaryResponse,
+    GenerateQuestionsRequest, GenerateQuestionsResponse,
+    RecordAnswerRequest, InterpretationQuestionRead,
+    InterpretationAnswerRead,
 )
 
 logger = logging.getLogger(__name__)
@@ -270,3 +273,76 @@ async def update_summary_only(
     if not dream:
         raise HTTPException(404, "Dream not found")
     return DreamRead.model_validate(dream).model_dump()
+
+# ───────────────────────── Interpretation Questions ─────────────────────── #
+
+@router.post("/{did}/generate-questions", response_model=GenerateQuestionsResponse)
+async def generate_interpretation_questions(
+    did: UUID,
+    request: GenerateQuestionsRequest,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Generate interpretation questions for the dream."""
+    logger.info(f"Generate questions endpoint called for dream {did}")
+    
+    questions = await svc.generate_interpretation_questions(
+        user_id, did, db,
+        num_questions=request.num_questions,
+        num_choices=request.num_choices
+    )
+    
+    if not questions:
+        raise HTTPException(400, "Failed to generate questions. Check if transcript is available.")
+    
+    return GenerateQuestionsResponse(
+        questions=[InterpretationQuestionRead.model_validate(q) for q in questions]
+    )
+
+@router.get("/{did}/questions", response_model=List[InterpretationQuestionRead])
+async def get_interpretation_questions(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get all interpretation questions for a dream."""
+    questions = await svc.get_interpretation_questions(user_id, did, db)
+    return [InterpretationQuestionRead.model_validate(q) for q in questions]
+
+@router.post("/{did}/answer", response_model=InterpretationAnswerRead)
+async def record_interpretation_answer(
+    did: UUID,
+    request: RecordAnswerRequest,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Record an answer to an interpretation question."""
+    if not request.is_valid:
+        raise HTTPException(400, "Either choice_id or custom_answer must be provided")
+    
+    answer = await svc.record_interpretation_answer(
+        user_id,
+        request.question_id,
+        request.choice_id,
+        request.custom_answer,
+        db
+    )
+    
+    if not answer:
+        raise HTTPException(400, "Failed to record answer")
+    
+    return InterpretationAnswerRead.model_validate(answer)
+
+@router.get("/{did}/answers", response_model=List[InterpretationAnswerRead])
+async def get_interpretation_answers(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get all interpretation answers for a dream by the current user."""
+    answers = await svc.get_interpretation_answers(user_id, did, db)
+    return [InterpretationAnswerRead.model_validate(a) for a in answers]

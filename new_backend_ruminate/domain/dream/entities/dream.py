@@ -43,3 +43,10 @@ class Dream(Base):
         cascade="all, delete-orphan",
         order_by="Segment.order",
     )
+    
+    interpretation_questions = relationship(
+        "InterpretationQuestion",
+        back_populates="dream",
+        cascade="all, delete-orphan",
+        order_by="InterpretationQuestion.question_order",
+    )

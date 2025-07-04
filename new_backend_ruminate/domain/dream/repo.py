@@ -5,6 +5,7 @@ from uuid import UUID
 
 from new_backend_ruminate.domain.dream.entities.dream import Dream
 from new_backend_ruminate.domain.dream.entities.segments import Segment
+from new_backend_ruminate.domain.dream.entities.interpretation import InterpretationQuestion, InterpretationChoice, InterpretationAnswer
 
 class DreamRepository(ABC):
     # dreams
@@ -46,3 +47,13 @@ class DreamRepository(ABC):
     async def get_audio_url(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[str]: ...
     @abstractmethod
     async def get_status(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[str]: ...
+    
+    # interpretation questions
+    @abstractmethod
+    async def create_interpretation_questions(self, user_id: UUID, did: UUID, questions: List[InterpretationQuestion], session: AsyncSession) -> List[InterpretationQuestion]: ...
+    @abstractmethod
+    async def get_interpretation_questions(self, user_id: UUID, did: UUID, session: AsyncSession) -> List[InterpretationQuestion]: ...
+    @abstractmethod
+    async def record_interpretation_answer(self, user_id: UUID, answer: InterpretationAnswer, session: AsyncSession) -> InterpretationAnswer: ...
+    @abstractmethod
+    async def get_interpretation_answers(self, user_id: UUID, did: UUID, session: AsyncSession) -> List[InterpretationAnswer]: ...

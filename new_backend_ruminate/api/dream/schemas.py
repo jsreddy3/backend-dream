@@ -109,3 +109,51 @@ class SummaryUpdate(BaseModel):
 class GenerateSummaryResponse(BaseModel):
     title: str
     summary: str
+
+# Interpretation Questions Schemas
+class InterpretationChoiceRead(BaseModel):
+    id: UUID
+    choice_text: str
+    choice_order: int
+    is_custom: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+class InterpretationQuestionRead(BaseModel):
+    id: UUID
+    question_text: str
+    question_order: int
+    choices: List[InterpretationChoiceRead]
+
+    model_config = ConfigDict(from_attributes=True)
+
+class GenerateQuestionsRequest(BaseModel):
+    num_questions: int = 3
+    num_choices: int = 3
+
+class GenerateQuestionsResponse(BaseModel):
+    questions: List[InterpretationQuestionRead]
+
+class RecordAnswerRequest(BaseModel):
+    question_id: UUID
+    choice_id: Optional[UUID] = None
+    custom_answer: Optional[str] = None
+    
+    @property
+    def is_valid(self) -> bool:
+        """Either choice_id or custom_answer must be provided."""
+        return bool(self.choice_id or self.custom_answer)
+
+class InterpretationAnswerRead(BaseModel):
+    id: UUID
+    question_id: UUID
+    selected_choice_id: Optional[UUID]
+    custom_answer: Optional[str]
+    answered_at: datetime
+
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat(timespec="seconds") + "Z"
+        }
+    )
