@@ -15,5 +15,6 @@ class AudioSegment(Base):
     order    = Column(Integer, nullable=False)
     s3_key   = Column(String(512), nullable=False)
     transcript = Column(Text, nullable=True)
+    transcription_status = Column(String(20), nullable=False, default="pending")  # pending, processing, completed, failed
 
     dream    = relationship("Dream", back_populates="segments")
