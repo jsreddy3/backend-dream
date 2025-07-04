@@ -15,7 +15,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from new_backend_ruminate.domain.dream.entities.dream import Dream, DreamStatus
+from new_backend_ruminate.domain.dream.entities.dream import Dream, DreamStatus, VideoStatus
 from new_backend_ruminate.domain.dream.entities.audio_segments import AudioSegment
 from new_backend_ruminate.domain.dream.repo import DreamRepository
 from new_backend_ruminate.domain.object_storage.repo import ObjectStorageRepository
@@ -103,10 +103,9 @@ class DreamService:
     # ---------------------------------------------------------------------- #
 
     async def finish_dream(self, user_id: UUID, did: UUID) -> None:
-        """Mark dream as completed and kick off video generation async."""
+        """Mark dream as completed after all transcriptions are done."""
         logger.info(f"Finishing dream {did} for user {user_id}")
         
-        from new_backend_ruminate.services.video import create_video  # local import to avoid cycle
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         
         # Wait for all segments to be transcribed
@@ -122,7 +121,7 @@ class DreamService:
                 
                 if not dream.segments:
                     logger.error(f"Dream {did} has no segments")
-                    raise ValueError(f"Dream {did} has no audio segments to generate video from")
+                    raise ValueError(f"Dream {did} has no audio segments")
                 
                 # Check transcription status of all segments
                 pending_segments = []
@@ -148,7 +147,7 @@ class DreamService:
                     # Check if any failed
                     if failed_segments:
                         logger.error(f"Dream {did} has {len(failed_segments)} failed segment(s): {failed_segments}")
-                        raise ValueError(f"Cannot generate video: {len(failed_segments)} segment(s) failed transcription")
+                        raise ValueError(f"Cannot finish dream: {len(failed_segments)} segment(s) failed transcription")
                     
                     # All segments completed successfully
                     logger.info(f"All {len(completed_segments)} segments successfully transcribed for dream {did}")
@@ -167,11 +166,33 @@ class DreamService:
         async with session_scope() as session:
             await self._repo.set_state(user_id, did, DreamStatus.TRANSCRIBED.value, session)
             logger.info(f"Updated dream {did} state to TRANSCRIBED")
-            
-        # fire-and-forget video
-        logger.info(f"Triggering video generation for dream {did}")
-        asyncio.create_task(create_video(user_id, did))
 
+    async def generate_video(self, user_id: UUID, did: UUID) -> None:
+        """Generate video for a transcribed dream."""
+        logger.info(f"Generating video for dream {did} for user {user_id}")
+        
+        from new_backend_ruminate.services.video import create_video  # local import to avoid cycle
+        from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
+        
+        # Check if dream is ready for video generation
+        async with session_scope() as session:
+            dream = await self._repo.get_dream(user_id, did, session)
+            if not dream:
+                raise ValueError(f"Dream {did} not found")
+            
+            # Check if dream is transcribed
+            if dream.state != DreamStatus.TRANSCRIBED.value:
+                raise ValueError(f"Dream {did} is not ready for video generation. Current state: {dream.state}")
+            
+            # Check if video is already being generated
+            if dream.video_status in [VideoStatus.QUEUED, VideoStatus.PROCESSING]:
+                logger.warning(f"Video generation already in progress for dream {did}")
+                return
+        
+        # Trigger video generation
+        logger.info(f"Triggering video generation for dream {did}")
+        await create_video(user_id, did)
+    
     async def mark_video_complete(self, user_id: UUID, did: UUID) -> None:
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         async with session_scope() as session:

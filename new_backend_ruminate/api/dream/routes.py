@@ -159,7 +159,14 @@ async def get_upload_url(
 async def finish_dream(did: UUID, user_id: UUID = Depends(get_current_user_id), svc: DreamService = Depends(get_dream_service)):
     logger.info(f"Finish dream endpoint called for dream {did}")
     await svc.finish_dream(user_id, did)
-    logger.info(f"Dream {did} finished, video generation triggered")
+    logger.info(f"Dream {did} finished, transcription completed")
+    return {"status": "transcribed"}
+
+@router.post("/{did}/generate-video")
+async def generate_video(did: UUID, user_id: UUID = Depends(get_current_user_id), svc: DreamService = Depends(get_dream_service)):
+    logger.info(f"Generate video endpoint called for dream {did}")
+    await svc.generate_video(user_id, did)
+    logger.info(f"Video generation triggered for dream {did}")
     return {"status": "video_queued"}
 
 @router.post("/{did}/video-complete")
