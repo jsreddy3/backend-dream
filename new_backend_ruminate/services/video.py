@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from uuid import UUID
 
-from new_backend_ruminate.domain.dream.entities.dream import VideoStatus
+from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
 from new_backend_ruminate.infrastructure.implementations.dream.rds_dream_repository import RDSDreamRepository
 from new_backend_ruminate.infrastructure.celery.adapter import CeleryVideoQueueAdapter
 from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
@@ -32,7 +32,7 @@ async def create_video(user_id: UUID, dream_id: UUID):
                 return
             
             # Check if video generation is already in progress
-            if dream.video_status in [VideoStatus.QUEUED, VideoStatus.PROCESSING]:
+            if dream.video_status in [GenerationStatus.QUEUED, GenerationStatus.PROCESSING]:
                 logger.warning(f"Video generation already in progress for dream {dream_id}")
                 return
             
@@ -84,7 +84,7 @@ async def create_video(user_id: UUID, dream_id: UUID):
             
             # Update dream with job information
             dream.video_job_id = job_id
-            dream.video_status = VideoStatus.QUEUED
+            dream.video_status = GenerationStatus.QUEUED
             dream.video_started_at = datetime.utcnow()
             
             await session.commit()

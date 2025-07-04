@@ -16,7 +16,7 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from new_backend_ruminate.domain.dream.entities.dream import Dream, DreamStatus, VideoStatus
+from new_backend_ruminate.domain.dream.entities.dream import Dream, DreamStatus, GenerationStatus
 from new_backend_ruminate.domain.dream.entities.segments import Segment
 from new_backend_ruminate.domain.dream.entities.interpretation import InterpretationQuestion, InterpretationChoice, InterpretationAnswer
 from new_backend_ruminate.domain.dream.repo import DreamRepository
@@ -82,7 +82,7 @@ class DreamService:
             return None
         
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
-        from new_backend_ruminate.domain.dream.entities.dream import SummaryStatus
+        from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
         
         # Try to atomically start summary generation
         async with session_scope() as session:
@@ -95,7 +95,7 @@ class DreamService:
         # Update status to processing
         try:
             async with session_scope() as session:
-                await self._repo.update_summary_status(user_id, did, SummaryStatus.PROCESSING, session)
+                await self._repo.update_summary_status(user_id, did, GenerationStatus.PROCESSING, session)
         except Exception as e:
             logger.error(f"Failed to update summary status to processing: {str(e)}")
         
@@ -105,13 +105,13 @@ class DreamService:
             dream = await self._repo.get_dream(user_id, did, session)
             if not dream:
                 logger.error(f"Dream {did} not found for user {user_id}")
-                await self._repo.update_summary_status(user_id, did, SummaryStatus.FAILED, session)
+                await self._repo.update_summary_status(user_id, did, GenerationStatus.FAILED, session)
                 return None
             
             transcript = await self._repo.get_transcript(user_id, did, session)
             if not transcript:
                 logger.error(f"No transcript available for dream {did}")
-                await self._repo.update_summary_status(user_id, did, SummaryStatus.FAILED, session)
+                await self._repo.update_summary_status(user_id, did, GenerationStatus.FAILED, session)
                 return None
         
         logger.info(f"Generating title and summary for dream {did}")
@@ -172,7 +172,7 @@ Return a JSON object with 'title' and 'summary' fields."""}
                 )
                 
                 # Mark summary generation as completed
-                await self._repo.update_summary_status(user_id, did, SummaryStatus.COMPLETED, session)
+                await self._repo.update_summary_status(user_id, did, GenerationStatus.COMPLETED, session)
                 
                 return updated_dream
             
@@ -180,7 +180,7 @@ Return a JSON object with 'title' and 'summary' fields."""}
             logger.error(f"Failed to generate title and summary for dream {did}: {str(e)}")
             try:
                 async with session_scope() as session:
-                    await self._repo.update_summary_status(user_id, did, SummaryStatus.FAILED, session)
+                    await self._repo.update_summary_status(user_id, did, GenerationStatus.FAILED, session)
             except Exception as update_error:
                 logger.error(f"Failed to update summary status to failed: {str(update_error)}")
             return None
@@ -198,25 +198,44 @@ Return a JSON object with 'title' and 'summary' fields."""}
             return []
         
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
+        from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
         
-        # Get the dream, transcript, and check for existing questions
+        # Try to atomically start questions generation
+        async with session_scope() as session:
+            acquired = await self._repo.try_start_questions_generation(user_id, did, session)
+            if not acquired:
+                logger.info(f"Questions generation already in progress for dream {did}")
+                # Return existing questions if any
+                return await self._repo.get_interpretation_questions(user_id, did, session)
+        
+        # Update status to processing
+        try:
+            async with session_scope() as session:
+                await self._repo.update_questions_status(user_id, did, GenerationStatus.PROCESSING, session)
+        except Exception as e:
+            logger.error(f"Failed to update questions status to processing: {str(e)}")
+        
+        # Get the dream and transcript
         transcript = None
         async with session_scope() as session:
             dream = await self._repo.get_dream(user_id, did, session)
             if not dream:
                 logger.error(f"Dream {did} not found for user {user_id}")
+                await self._repo.update_questions_status(user_id, did, GenerationStatus.FAILED, session)
                 return []
             
             if not dream.transcript:
                 logger.error(f"No transcript available for dream {did}")
+                await self._repo.update_questions_status(user_id, did, GenerationStatus.FAILED, session)
                 return []
             
             transcript = dream.transcript
             
-            # Check if questions already exist
+            # Check if questions already exist (shouldn't happen with status check, but just in case)
             existing_questions = await self._repo.get_interpretation_questions(user_id, did, session)
             if existing_questions:
                 logger.info(f"Questions already exist for dream {did}, returning existing questions")
+                await self._repo.update_questions_status(user_id, did, GenerationStatus.COMPLETED, session)
                 return existing_questions
         
         logger.info(f"Generating {num_questions} interpretation questions for dream {did}")
@@ -314,10 +333,18 @@ Return a JSON array with this structure:
                 saved_questions = await self._repo.create_interpretation_questions(user_id, did, questions, session)
                 logger.info(f"Generated and saved {len(saved_questions)} interpretation questions for dream {did}")
                 
+                # Mark questions generation as completed
+                await self._repo.update_questions_status(user_id, did, GenerationStatus.COMPLETED, session)
+                
                 return saved_questions
             
         except Exception as e:
             logger.error(f"Failed to generate interpretation questions for dream {did}: {str(e)}")
+            try:
+                async with session_scope() as session:
+                    await self._repo.update_questions_status(user_id, did, GenerationStatus.FAILED, session)
+            except Exception as update_error:
+                logger.error(f"Failed to update questions status to failed: {str(update_error)}")
             return []
 
     async def record_interpretation_answer(
@@ -365,6 +392,23 @@ Return a JSON array with this structure:
             return None
         
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
+        from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
+        
+        # Try to atomically start analysis generation (unless forcing regeneration)
+        if not force_regenerate:
+            async with session_scope() as session:
+                acquired = await self._repo.try_start_analysis_generation(user_id, did, session)
+                if not acquired:
+                    logger.info(f"Analysis generation already in progress for dream {did}")
+                    # Return the dream so caller can see current state
+                    return await self._repo.get_dream(user_id, did, session)
+        
+        # Update status to processing
+        try:
+            async with session_scope() as session:
+                await self._repo.update_analysis_status(user_id, did, GenerationStatus.PROCESSING, session)
+        except Exception as e:
+            logger.error(f"Failed to update analysis status to processing: {str(e)}")
         
         # Get the dream and all related data
         dream = None
@@ -379,16 +423,19 @@ Return a JSON array with this structure:
             dream = await self._repo.get_dream(user_id, did, session)
             if not dream:
                 logger.error(f"Dream {did} not found for user {user_id}")
+                await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
                 return None
             
             # Check if analysis already exists and not forcing regeneration
             if dream.analysis and not force_regenerate:
                 logger.info(f"Analysis already exists for dream {did}, returning existing analysis")
+                await self._repo.update_analysis_status(user_id, did, GenerationStatus.COMPLETED, session)
                 return dream
             
             # Validate prerequisites
             if not dream.transcript:
                 logger.error(f"No transcript available for dream {did}, cannot generate analysis")
+                await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
                 return None
             
             # Extract all needed data while session is open
@@ -473,11 +520,19 @@ Create a thoughtful interpretation."""}
                     session
                 )
                 
+                # Mark analysis generation as completed
+                await self._repo.update_analysis_status(user_id, did, GenerationStatus.COMPLETED, session)
+                
                 logger.info(f"Generated and saved analysis for dream {did}")
                 return updated_dream
             
         except Exception as e:
             logger.error(f"Failed to generate analysis for dream {did}: {str(e)}")
+            try:
+                async with session_scope() as session:
+                    await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
+            except Exception as update_error:
+                logger.error(f"Failed to update analysis status to failed: {str(update_error)}")
             return None
 
     # ───────────────────────────── segments ──────────────────────────────── #
@@ -647,7 +702,7 @@ Create a thoughtful interpretation."""}
                 raise ValueError(f"Dream {did} is not ready for video generation. Current state: {dream.state}")
             
             # Check if video is already being generated
-            if dream.video_status in [VideoStatus.QUEUED, VideoStatus.PROCESSING]:
+            if dream.video_status in [GenerationStatus.QUEUED, GenerationStatus.PROCESSING]:
                 logger.warning(f"Video generation already in progress for dream {did}")
                 return
         
@@ -671,7 +726,7 @@ Create a thoughtful interpretation."""}
     ) -> None:
         """Handle video generation completion callback from worker."""
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
-        from new_backend_ruminate.domain.dream.entities.dream import VideoStatus
+        from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
         from datetime import datetime
         
         async with session_scope() as session:
@@ -681,13 +736,13 @@ Create a thoughtful interpretation."""}
             
             # Update video fields based on status
             if status == "completed":
-                dream.video_status = VideoStatus.COMPLETED
+                dream.video_status = GenerationStatus.COMPLETED
                 dream.video_url = video_url
                 dream.video_metadata = metadata
                 dream.video_completed_at = datetime.utcnow()
                 dream.state = DreamStatus.VIDEO_READY.value
             else:  # failed
-                dream.video_status = VideoStatus.FAILED
+                dream.video_status = GenerationStatus.FAILED
                 dream.video_metadata = {"error": error} if error else None
                 dream.video_completed_at = datetime.utcnow()
             
@@ -697,7 +752,7 @@ Create a thoughtful interpretation."""}
         """Get the current status of video generation for a dream."""
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         from new_backend_ruminate.infrastructure.celery.adapter import CeleryVideoQueueAdapter
-        from new_backend_ruminate.domain.dream.entities.dream import VideoStatus
+        from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
         
         async with session_scope() as session:
             dream = await self._repo.get_dream(user_id, dream_id, session)
@@ -710,8 +765,8 @@ Create a thoughtful interpretation."""}
                 job_status = await video_queue.get_job_status(dream.video_job_id)
                 
                 # Update status if it changed
-                if job_status["status"] == "PROCESSING" and dream.video_status == VideoStatus.QUEUED:
-                    dream.video_status = VideoStatus.PROCESSING
+                if job_status["status"] == "PROCESSING" and dream.video_status == GenerationStatus.QUEUED:
+                    dream.video_status = GenerationStatus.PROCESSING
                     await session.commit()
                 
                 return {

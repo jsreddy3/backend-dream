@@ -49,8 +49,10 @@ class DreamRead(DreamBase):
     transcript: Optional[str]
     summary: Optional[str]
     summary_status: Optional[str]
+    questions_status: Optional[str]
     additional_info: Optional[str]
     analysis: Optional[str]
+    analysis_status: Optional[str]
     analysis_generated_at: Optional[datetime]
     analysis_metadata: Optional[dict]
     state: str

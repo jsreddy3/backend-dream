@@ -226,7 +226,7 @@ class RDSDreamRepository(DreamRepository):
     
     async def try_start_summary_generation(self, user_id: UUID, did: UUID, session: AsyncSession) -> bool:
         """Atomically try to start summary generation. Returns True if successful, False if already in progress."""
-        from new_backend_ruminate.domain.dream.entities.dream import SummaryStatus
+        from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
         
         # Try to atomically update from None to PENDING
         stmt = (
@@ -237,11 +237,81 @@ class RDSDreamRepository(DreamRepository):
                     Dream.user_id == user_id,
                     or_(
                         Dream.summary_status.is_(None),
-                        Dream.summary_status == SummaryStatus.FAILED
+                        Dream.summary_status == GenerationStatus.FAILED
                     )
                 )
             )
-            .values(summary_status=SummaryStatus.PENDING)
+            .values(summary_status=GenerationStatus.PENDING)
+        )
+        
+        result = await session.execute(stmt)
+        await session.commit()
+        
+        # If we updated a row, we successfully acquired the lock
+        return result.rowcount > 0
+    
+    async def update_questions_status(self, user_id: UUID, did: UUID, status: str, session: AsyncSession) -> Optional[Dream]:
+        """Update the questions generation status."""
+        dream = await self.get_dream(user_id, did, session)
+        if dream:
+            dream.questions_status = status
+            await session.commit()
+            await session.refresh(dream)
+        return dream
+    
+    async def try_start_questions_generation(self, user_id: UUID, did: UUID, session: AsyncSession) -> bool:
+        """Atomically try to start questions generation. Returns True if successful, False if already in progress."""
+        from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
+        
+        # Try to atomically update from None to PENDING
+        stmt = (
+            update(Dream)
+            .where(
+                and_(
+                    Dream.id == did,
+                    Dream.user_id == user_id,
+                    or_(
+                        Dream.questions_status.is_(None),
+                        Dream.questions_status == GenerationStatus.FAILED
+                    )
+                )
+            )
+            .values(questions_status=GenerationStatus.PENDING)
+        )
+        
+        result = await session.execute(stmt)
+        await session.commit()
+        
+        # If we updated a row, we successfully acquired the lock
+        return result.rowcount > 0
+    
+    async def update_analysis_status(self, user_id: UUID, did: UUID, status: str, session: AsyncSession) -> Optional[Dream]:
+        """Update the analysis generation status."""
+        dream = await self.get_dream(user_id, did, session)
+        if dream:
+            dream.analysis_status = status
+            await session.commit()
+            await session.refresh(dream)
+        return dream
+    
+    async def try_start_analysis_generation(self, user_id: UUID, did: UUID, session: AsyncSession) -> bool:
+        """Atomically try to start analysis generation. Returns True if successful, False if already in progress."""
+        from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
+        
+        # Try to atomically update from None to PENDING
+        stmt = (
+            update(Dream)
+            .where(
+                and_(
+                    Dream.id == did,
+                    Dream.user_id == user_id,
+                    or_(
+                        Dream.analysis_status.is_(None),
+                        Dream.analysis_status == GenerationStatus.FAILED
+                    )
+                )
+            )
+            .values(analysis_status=GenerationStatus.PENDING)
         )
         
         result = await session.execute(stmt)
