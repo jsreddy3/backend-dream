@@ -62,19 +62,22 @@ async def test_dream_flow():
         print(f"  Has transcript: {bool(dream.get('transcript'))}")
         print(f"  Summary status: {dream.get('summary_status')}")
         
-        # 4. Finish the dream (should trigger summary generation)
-        print(f"\n4. Finishing dream (triggering transcription consolidation and summary)...")
+        # 4. Finish the dream (should trigger summary generation and wait for completion)
+        print(f"\n4. Finishing dream (this will wait for transcription consolidation and summary generation)...")
         response = await client.post(
             f"{API_BASE}/dreams/{dream_id}/finish",
             headers=headers
         )
         response.raise_for_status()
-        result = response.json()
-        print(f"✓ Dream finished: {result}")
+        finished_dream = response.json()
+        print(f"✓ Dream finished!")
+        print(f"  State: {finished_dream['state']}")
+        print(f"  Title: {finished_dream['title']}")
+        print(f"  Summary Status: {finished_dream.get('summary_status')}")
+        print(f"  Has Summary: {bool(finished_dream.get('summary'))}")
         
-        # 5. Wait a moment for async summary generation
-        print(f"\n5. Waiting for summary generation...")
-        await asyncio.sleep(2)
+        # 5. No need to wait anymore since finish endpoint waits for summary
+        print(f"\n5. Summary generation completed during finish endpoint")
         
         # 6. Check final dream state
         print(f"\n6. Checking final dream state...")

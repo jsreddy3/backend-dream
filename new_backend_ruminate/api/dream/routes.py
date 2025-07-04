@@ -176,12 +176,23 @@ async def get_upload_url(
 
 # ─────────────────────── finish & video complete ────────────────────── #
 
-@router.post("/{did}/finish")
-async def finish_dream(did: UUID, user_id: UUID = Depends(get_current_user_id), svc: DreamService = Depends(get_dream_service)):
+@router.post("/{did}/finish", response_model=DreamRead)
+async def finish_dream(
+    did: UUID, 
+    user_id: UUID = Depends(get_current_user_id), 
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session)
+):
     logger.info(f"Finish dream endpoint called for dream {did}")
     await svc.finish_dream(user_id, did)
-    logger.info(f"Dream {did} finished, transcription completed")
-    return {"status": "transcribed"}
+    logger.info(f"Dream {did} finished, transcription and summary generation completed")
+    
+    # Return the updated dream with generated title and summary
+    dream = await svc.get_dream(user_id, did, db)
+    if not dream:
+        raise HTTPException(404, "Dream not found")
+    
+    return DreamRead.model_validate(dream).model_dump()
 
 @router.post("/{did}/generate-video")
 async def generate_video(did: UUID, user_id: UUID = Depends(get_current_user_id), svc: DreamService = Depends(get_dream_service)):

@@ -682,7 +682,12 @@ Create a thoughtful interpretation."""}
         
         # Trigger summary generation after transcription is complete
         logger.info(f"Triggering summary generation for dream {did}")
-        await self.generate_title_and_summary(user_id, did)
+        summary_result = await self.generate_title_and_summary(user_id, did)
+        
+        if not summary_result:
+            logger.warning(f"Summary generation failed for dream {did}, but continuing")
+        else:
+            logger.info(f"Summary generation completed for dream {did}: title='{summary_result.title}'")
 
     async def generate_video(self, user_id: UUID, did: UUID) -> None:
         """Generate video for a transcribed dream."""
