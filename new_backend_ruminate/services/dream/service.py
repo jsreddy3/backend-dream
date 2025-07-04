@@ -35,14 +35,16 @@ class DreamService:
         user_repo: UserRepository,
         transcription_svc: Optional[TranscriptionService] = None,
         event_hub: Optional[EventStreamHub] = None,
-        llm_service: Optional[LLMService] = None,
+        summary_llm: Optional[LLMService] = None,
+        interpretation_llm: Optional[LLMService] = None,
     ) -> None:
         self._repo = dream_repo
         self._storage = storage_repo
         self._user_repo = user_repo
         self._transcribe = transcription_svc
         self._hub = event_hub
-        self._llm = llm_service
+        self._summary_llm = summary_llm
+        self._interpretation_llm = interpretation_llm
 
     # ─────────────────────────────── dreams ──────────────────────────────── #
 
@@ -68,8 +70,8 @@ class DreamService:
 
     async def generate_title_and_summary(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[Dream]:
         """Generate AI title and summary from dream transcript."""
-        if not self._llm:
-            logger.warning("LLM service not available, cannot generate title and summary")
+        if not self._summary_llm:
+            logger.warning("Summary LLM service not available, cannot generate title and summary")
             return None
         
         # Get the dream and transcript
@@ -122,8 +124,8 @@ Return a JSON object with 'title' and 'summary' fields."""}
         }
         
         try:
-            # Use async LLM call with structured response
-            result = await self._llm.generate_structured_response(
+            # Use async LLM call with structured response using dedicated summary LLM
+            result = await self._summary_llm.generate_structured_response(
                 messages=messages,
                 response_format={"type": "json_object"},
                 json_schema=json_schema

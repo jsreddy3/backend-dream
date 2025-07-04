@@ -50,6 +50,10 @@ class _Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     openai_api_key: str
     openai_model: str = "gpt-4o"
+    
+    # Dream-specific LLM models (required, no fallback)
+    dream_summary_model: str = Field(..., alias="DREAM_SUMMARY_MODEL")
+    dream_interpretation_model: str = Field(..., alias="DREAM_INTERPRETATION_MODEL")
 
     # ------------------------------------------------------------------ #
     # Misc                                                                #
