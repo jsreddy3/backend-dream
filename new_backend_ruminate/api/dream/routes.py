@@ -15,6 +15,7 @@ from new_backend_ruminate.dependencies import (
     get_dream_service,
     get_storage_service,
     get_current_user_id,
+    get_ios_notification_service,
 )
 from . import schemas
 from .schemas import (
@@ -160,6 +161,8 @@ async def video_complete(
     request: schemas.VideoCompleteRequest,
     svc: DreamService = Depends(get_dream_service),
     user_id: UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_session),
+    ios_service: IOSNotificationService = Depends(get_ios_notification_service),
 ):
     """Handle video generation completion callback from worker."""
     await svc.handle_video_completion(
@@ -170,6 +173,10 @@ async def video_complete(
         metadata=request.metadata,
         error=request.error
     )
+
+    if request.status == "completed":
+        await ios_service.send_notification(user_id=user_id, dream_id=did, session=db)
+
     return {"status": "ok"}
 
 @router.get("/{did}/video-status", response_model=schemas.VideoStatusResponse)

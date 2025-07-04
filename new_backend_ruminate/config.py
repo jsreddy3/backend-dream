@@ -79,6 +79,15 @@ class _Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------ #
+    # APNs Configuration                                                 #
+    # ------------------------------------------------------------------ #
+    ios_team_id: str = Field(..., alias="IOS_TEAM_ID")
+    ios_key_id: str = Field(..., alias="IOS_KEY_ID")
+    apns_key: str = Field(..., alias="APNS_KEY")
+    ios_sandbox: bool = Field(..., alias="IOS_SANDBOX")
+    ios_bundle_id: str = Field(..., alias="IOS_BUNDLE_ID")
+
+    # ------------------------------------------------------------------ #
     # Derived properties                                                 #
     # ------------------------------------------------------------------ #
     @validator("db_url", pre=True, always=True)

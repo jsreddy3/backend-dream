@@ -19,10 +19,12 @@ from new_backend_ruminate.infrastructure.implementations.conversation.rds_conver
 from new_backend_ruminate.infrastructure.implementations.dream.rds_dream_repository import RDSDreamRepository
 from new_backend_ruminate.infrastructure.implementations.object_storage.s3_storage_repository import S3StorageRepository
 from new_backend_ruminate.infrastructure.implementations.user.rds_user_repository import RDSUserRepository
+from new_backend_ruminate.infrastructure.implementations.ios.rds_ios_repository import RDSDeviceRepository
 from new_backend_ruminate.infrastructure.llm.openai_llm import OpenAILLM
 from new_backend_ruminate.services.dream.service import DreamService
 from new_backend_ruminate.services.conversation.service import ConversationService
 from new_backend_ruminate.infrastructure.transcription.deepgram import DeepgramTranscriptionService
+from new_backend_ruminate.infrastructure.notifications.ios_notification_service import IOSNotificationService
 from new_backend_ruminate.services.agent.service import AgentService
 from new_backend_ruminate.context.builder import ContextBuilder
 from new_backend_ruminate.infrastructure.db.bootstrap import get_session as get_db_session
@@ -34,25 +36,48 @@ from uuid import UUID
 from typing import AsyncGenerator
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from aioapns import APNs
+import base64
 
 register_agent_renderers()
+
+# ────────────────────────── constructed services ─────────────────────────── #
+def _build_apns() -> APNs:
+    key_b64 = settings().apns_key
+    key     = base64.b64decode(key_b64)
+
+    return APNs(
+        key=key,
+        key_id=settings().ios_key_id,
+        team_id=settings().ios_team_id,
+        topic=settings().ios_bundle_id,
+        use_sandbox=settings().ios_sandbox,
+    )
+
+_apns = _build_apns()
 
 # ────────────────────────── singletons ─────────────────────────── #
 
 _hub = EventStreamHub()
+
 _conversation_repo = RDSConversationRepository()
 _dream_repo = RDSDreamRepository()
 _user_repo = RDSUserRepository()
+_ios_repo = RDSDeviceRepository()
+
 _llm  = OpenAILLM(
     api_key=settings().openai_api_key,
     model=settings().openai_model,
 )
 _ctx_builder = ContextBuilder()
+
 _conversation_service = ConversationService(_conversation_repo, _llm, _hub, _ctx_builder)
 _agent_service = AgentService(_conversation_repo, _llm, _hub, _ctx_builder)
 _storage_service = S3StorageRepository()
 _transcribe = DeepgramTranscriptionService()
-_dream_service = DreamService(_dream_repo, _storage_service, _user_repo, _transcribe, _hub)   # _dream_repo = RDSDreamRepository()
+_dream_service = DreamService(_dream_repo, _storage_service, _user_repo, _transcribe, _hub)
+_ios_notification_service = IOSNotificationService(_apns, _ios_repo)
+
 _video_queue = CeleryVideoQueueAdapter()
 
 # ─────────────────────── DI provider helpers ───────────────────── #
@@ -91,9 +116,20 @@ def get_storage_service() -> S3StorageRepository:
 def get_llm_service() -> OpenAILLM:
     return _llm
 
+# ───────────────────── iOS devices helpers ────────────────────── #
+
+def get_ios_device_repository() -> RDSDeviceRepository:
+    return _ios_repo
+
 def get_video_queue() -> VideoQueuePort:
     """Return the singleton video queue adapter."""
     return _video_queue
+
+def get_apns_client() -> APNs:
+    return _apns
+
+def get_ios_notification_service() -> IOSNotificationService:
+    return _ios_notification_service
 
 # ───────────────────────── auth helpers ───────────────────────── #
 _security = HTTPBearer()

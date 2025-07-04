@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy import Column, String, DateTime, func
 
 from new_backend_ruminate.infrastructure.db.meta import Base
+from sqlalchemy.orm import relationship
 
 class User(Base):
     """Persisted user identified by Google subject (sub)."""
@@ -18,6 +19,9 @@ class User(Base):
     name        = Column(String(255), nullable=True)
     picture     = Column(String(512), nullable=True)
     created     = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    devices = relationship("Device", back_populates="user", cascade="all, delete-orphan")
+    dreams = relationship("Dream", back_populates="user", cascade="all, delete-orphan")
 
     def update_from_google_claims(self, claims: dict[str, str | None]):
         """Update basic profile fields from Google claims in-place."""

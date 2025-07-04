@@ -36,6 +36,7 @@ class Dream(Base):
     video_started_at = Column(DateTime, nullable=True)  # When generation started
     video_completed_at = Column(DateTime, nullable=True)  # When generation completed
 
+    user = relationship("User", back_populates="dreams", cascade="all, delete-orphan")
     segments  = relationship(
         "AudioSegment",
         back_populates="dream",
