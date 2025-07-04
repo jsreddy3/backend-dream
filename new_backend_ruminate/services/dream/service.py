@@ -390,29 +390,12 @@ Return a JSON array with this structure:
         
         # Prepare the analysis prompt
         messages = [
-            {"role": "system", "content": """You are an expert dream analyst who helps people understand the deeper meanings and insights within their dreams. 
-Your approach combines psychological understanding, symbolic interpretation, and personal context to provide meaningful insights.
-
-IMPORTANT GUIDELINES:
-- Base your analysis on the actual dream content and the dreamer's responses
-- Consider both universal symbols and personal associations
-- Be thoughtful and non-prescriptive - offer possibilities rather than definitive answers
-- Connect dream elements to the dreamer's provided context when available
-- Maintain a warm, professional, and insightful tone
-- Avoid making assumptions about the dreamer's life beyond what they've shared
-- Focus on themes, emotions, symbols, and potential personal significance"""},
+            {"role": "system", "content": """You are an expert dream analyst who helps people understand the deeper meanings and insights within their dreams."""},
             {"role": "user", "content": f"""Please provide a comprehensive analysis of this dream based on all the information provided:
 
-{chr(10).join(context_parts)}
+{"\n".join(context_parts)}
 
-Create a thoughtful interpretation that:
-1. Identifies key themes and symbols in the dream
-2. Explores potential meanings based on the dreamer's responses
-3. Considers emotional undertones and their significance
-4. Connects elements to any personal context shared
-5. Offers insights for self-reflection without being prescriptive
-
-Please write the analysis in a warm, accessible style that invites further reflection."""}
+Create a thoughtful interpretation."""}
         ]
         
         try:
