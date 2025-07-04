@@ -32,13 +32,15 @@ class DreamCreate(DreamBase):
     id: UUID | None = None          # accept optional id from client
     title: str
 
-class DreamUpdate(DreamBase):
-    pass
+class DreamUpdate(BaseModel):
+    title: Optional[str] = None
+    summary: Optional[str] = None
 
 class DreamRead(DreamBase):
     id: UUID
     created: datetime
     transcript: Optional[str]
+    summary: Optional[str]
     state: str
     segments: List[AudioSegmentRead] = []
     video_url: Optional[str] = None
@@ -93,3 +95,10 @@ class VideoStatusResponse(BaseModel):
 class VideoURLResponse(BaseModel):
     video_url: str
     expires_in: int = 3600  # URL expires in 1 hour by default
+
+class SummaryUpdate(BaseModel):
+    summary: str
+
+class GenerateSummaryResponse(BaseModel):
+    title: str
+    summary: str

@@ -27,6 +27,7 @@ class Dream(Base):
     state      = Column(String(20), default=DreamStatus.PENDING.value, nullable=False)
     created    = Column(DateTime, default=datetime.utcnow)
     title      = Column(String(255), nullable=True)
+    summary    = Column(Text, nullable=True)
     
     # Video generation fields
     video_job_id     = Column(String(255), nullable=True)  # Celery task ID

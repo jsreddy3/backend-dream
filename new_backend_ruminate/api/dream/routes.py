@@ -22,6 +22,7 @@ from .schemas import (
     DreamCreate, DreamUpdate, DreamRead,
     AudioSegmentCreate, AudioSegmentRead, TranscriptRead,
     UploadUrlResponse, VideoURLResponse,
+    SummaryUpdate, GenerateSummaryResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,14 +65,25 @@ async def read_dream(
     return DreamRead.model_validate(dream).model_dump()
 
 @router.patch("/{did}")
-async def update_title(
+async def update_dream(
     did: UUID,
     patch: DreamUpdate,
     user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session),
 ):
-    dream = await svc.update_title(user_id, did, patch.title, db)
+    # Handle title and/or summary updates
+    dream = None
+    if patch.title is not None and patch.summary is not None:
+        # Update both
+        dream = await svc._repo.update_title_and_summary(user_id, did, patch.title, patch.summary, db)
+    elif patch.title is not None:
+        # Update title only
+        dream = await svc.update_title(user_id, did, patch.title, db)
+    elif patch.summary is not None:
+        # Update summary only
+        dream = await svc.update_summary(user_id, did, patch.summary, db)
+    
     if not dream:
         raise HTTPException(404, "Dream not found")
     return DreamRead.model_validate(dream).model_dump()
@@ -222,3 +234,35 @@ async def get_video_url(
     presigned_url = await storage.generate_presigned_get_by_key(video_s3_key)
     
     return VideoURLResponse(video_url=presigned_url, expires_in=3600)
+
+# ───────────────────────────── AI Summary ─────────────────────────────── #
+
+@router.post("/{did}/generate-summary", response_model=GenerateSummaryResponse)
+async def generate_summary(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Generate AI-powered title and summary from the dream transcript."""
+    logger.info(f"Generate summary endpoint called for dream {did}")
+    
+    dream = await svc.generate_title_and_summary(user_id, did, db)
+    if not dream:
+        raise HTTPException(400, "Failed to generate summary. Check if transcript is available.")
+    
+    return GenerateSummaryResponse(title=dream.title, summary=dream.summary)
+
+@router.patch("/{did}/summary")
+async def update_summary_only(
+    did: UUID,
+    summary_update: SummaryUpdate,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Update only the summary of a dream."""
+    dream = await svc.update_summary(user_id, did, summary_update.summary, db)
+    if not dream:
+        raise HTTPException(404, "Dream not found")
+    return DreamRead.model_validate(dream).model_dump()

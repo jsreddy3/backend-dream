@@ -21,6 +21,7 @@ from new_backend_ruminate.domain.dream.repo import DreamRepository
 from new_backend_ruminate.domain.object_storage.repo import ObjectStorageRepository
 from new_backend_ruminate.domain.user.repo import UserRepository
 from new_backend_ruminate.domain.ports.transcription import TranscriptionService  # optional
+from new_backend_ruminate.domain.ports.llm import LLMService
 from new_backend_ruminate.dependencies import EventStreamHub
 
 logger = logging.getLogger(__name__)
@@ -34,12 +35,14 @@ class DreamService:
         user_repo: UserRepository,
         transcription_svc: Optional[TranscriptionService] = None,
         event_hub: Optional[EventStreamHub] = None,
+        llm_service: Optional[LLMService] = None,
     ) -> None:
         self._repo = dream_repo
         self._storage = storage_repo
         self._user_repo = user_repo
         self._transcribe = transcription_svc
         self._hub = event_hub
+        self._llm = llm_service
 
     # ─────────────────────────────── dreams ──────────────────────────────── #
 
@@ -59,6 +62,88 @@ class DreamService:
 
     async def get_transcript(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[str]:
         return await self._repo.get_transcript(user_id, did, session)
+
+    async def update_summary(self, user_id: UUID, did: UUID, summary: str, session: AsyncSession) -> Optional[Dream]:
+        return await self._repo.update_summary(user_id, did, summary, session)
+
+    async def generate_title_and_summary(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[Dream]:
+        """Generate AI title and summary from dream transcript."""
+        if not self._llm:
+            logger.warning("LLM service not available, cannot generate title and summary")
+            return None
+        
+        # Get the dream and transcript
+        dream = await self._repo.get_dream(user_id, did, session)
+        if not dream:
+            logger.error(f"Dream {did} not found for user {user_id}")
+            return None
+        
+        transcript = await self._repo.get_transcript(user_id, did, session)
+        if not transcript:
+            logger.error(f"No transcript available for dream {did}")
+            return None
+        
+        logger.info(f"Generating title and summary for dream {did}")
+        
+        # Prepare the prompt for the LLM
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant that creates clear, concise summaries of dream recordings. Your task is to create a title and summary that accurately represents the dream content without adding any details, interpretations, or embellishments not present in the original transcript."},
+            {"role": "user", "content": f"""Based on this dream transcript, create a short title and a clear summary. 
+
+IMPORTANT RULES:
+- The title should be 3-7 words that capture the main theme
+- The summary should be a clear, factual description of what happened in the dream
+- Do NOT add any details not mentioned in the transcript
+- Do NOT interpret or analyze the dream
+- Do NOT embellish or extrapolate
+- Stay completely faithful to the original content
+- Use present tense for the summary
+
+Dream transcript:
+{transcript}
+
+Return a JSON object with 'title' and 'summary' fields."""}
+        ]
+        
+        # Define the JSON schema for the response
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "A short title (3-7 words) capturing the main theme"
+                },
+                "summary": {
+                    "type": "string", 
+                    "description": "A clear, factual summary of the dream events"
+                }
+            },
+            "required": ["title", "summary"]
+        }
+        
+        try:
+            # Use async LLM call with structured response
+            result = await self._llm.generate_structured_response(
+                messages=messages,
+                response_format={"type": "json_object"},
+                json_schema=json_schema
+            )
+            
+            logger.info(f"Generated title: {result.get('title')}, summary length: {len(result.get('summary', ''))}")
+            
+            # Update the dream with generated title and summary
+            updated_dream = await self._repo.update_title_and_summary(
+                user_id, did, 
+                result['title'], 
+                result['summary'], 
+                session
+            )
+            
+            return updated_dream
+            
+        except Exception as e:
+            logger.error(f"Failed to generate title and summary for dream {did}: {str(e)}")
+            return None
 
     # ───────────────────────────── segments ──────────────────────────────── #
 

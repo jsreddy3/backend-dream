@@ -52,7 +52,7 @@ _conversation_service = ConversationService(_conversation_repo, _llm, _hub, _ctx
 _agent_service = AgentService(_conversation_repo, _llm, _hub, _ctx_builder)
 _storage_service = S3StorageRepository()
 _transcribe = DeepgramTranscriptionService()
-_dream_service = DreamService(_dream_repo, _storage_service, _user_repo, _transcribe, _hub)   # _dream_repo = RDSDreamRepository()
+_dream_service = DreamService(_dream_repo, _storage_service, _user_repo, _transcribe, _hub, _llm)   # _dream_repo = RDSDreamRepository()
 _video_queue = CeleryVideoQueueAdapter()
 
 # ─────────────────────── DI provider helpers ───────────────────── #
