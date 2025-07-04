@@ -38,8 +38,8 @@ class Dream(Base):
     video_completed_at = Column(DateTime, nullable=True)  # When generation completed
 
     segments  = relationship(
-        "AudioSegment",
+        "Segment",
         back_populates="dream",
         cascade="all, delete-orphan",
-        order_by="AudioSegment.order",
+        order_by="Segment.order",
     )

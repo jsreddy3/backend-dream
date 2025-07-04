@@ -4,17 +4,24 @@ from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict, computed_field
 import json
 
-class AudioSegmentBase(BaseModel):
-    filename: str
-    duration: float   # seconds
+class SegmentBase(BaseModel):
     order: int
-    s3_key: str
+    modality: str  # "audio" or "text"
 
-class AudioSegmentCreate(AudioSegmentBase):
+class SegmentCreate(SegmentBase):
     segment_id: UUID
+    # Audio-specific fields
+    filename: Optional[str] = None
+    duration: Optional[float] = None  # seconds
+    s3_key: Optional[str] = None
+    # Text-specific fields
+    text: Optional[str] = None
 
-class AudioSegmentRead(AudioSegmentBase):
+class SegmentRead(SegmentBase):
     id: UUID = Field(alias="segment_id")  # Swap field name and alias
+    filename: Optional[str] = None
+    duration: Optional[float] = None
+    s3_key: Optional[str] = None
     transcript: Optional[str] = None
 
     model_config = ConfigDict(
@@ -42,7 +49,7 @@ class DreamRead(DreamBase):
     transcript: Optional[str]
     summary: Optional[str]
     state: str
-    segments: List[AudioSegmentRead] = []
+    segments: List[SegmentRead] = []
     video_url: Optional[str] = None
     
     @property  

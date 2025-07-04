@@ -16,7 +16,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from new_backend_ruminate.domain.dream.entities.dream import Dream, DreamStatus, VideoStatus
-from new_backend_ruminate.domain.dream.entities.audio_segments import AudioSegment
+from new_backend_ruminate.domain.dream.entities.segments import Segment
 from new_backend_ruminate.domain.dream.repo import DreamRepository
 from new_backend_ruminate.domain.object_storage.repo import ObjectStorageRepository
 from new_backend_ruminate.domain.user.repo import UserRepository
@@ -155,16 +155,32 @@ Return a JSON object with 'title' and 'summary' fields."""}
         did: UUID,
         seg_payload,
         session: AsyncSession,
-    ) -> AudioSegment:
-        seg = AudioSegment(
-            id=seg_payload.segment_id,
-            dream_id=did,
-            filename=seg_payload.filename,
-            duration=seg_payload.duration,
-            order=seg_payload.order,
-            s3_key=seg_payload.s3_key,
-            transcription_status="pending",  # Explicitly set initial status
-        )
+    ) -> Segment:
+        if seg_payload.modality == "text":
+            # For text segments, store the text directly as transcript
+            seg = Segment(
+                id=seg_payload.segment_id,
+                dream_id=did,
+                modality="text",
+                filename=None,  # No filename for text
+                duration=None,  # No duration for text
+                order=seg_payload.order,
+                s3_key=None,  # No S3 key for text
+                transcript=seg_payload.text,  # Store text directly
+                transcription_status="completed",  # Already have the text
+            )
+        else:  # audio
+            seg = Segment(
+                id=seg_payload.segment_id,
+                dream_id=did,
+                modality="audio",
+                filename=seg_payload.filename,
+                duration=seg_payload.duration,
+                order=seg_payload.order,
+                s3_key=seg_payload.s3_key,
+                transcript=None,  # Will be filled by transcription
+                transcription_status="pending",  # Needs transcription
+            )
         return await self._repo.create_segment(user_id, seg, session)
 
     async def delete_segment(self, user_id: UUID, did: UUID, sid: UUID, session: AsyncSession) -> bool:
@@ -173,12 +189,13 @@ Return a JSON object with 'title' and 'summary' fields."""}
         if not segment:
             return False
         await self._repo.delete_segment(user_id, did, sid, session)
-        # best-effort delete from storage
-        try:
-            await self._storage.delete_object(segment.s3_key)
-        except Exception as _:
-            # log in production
-            pass
+        # best-effort delete from storage (only for audio segments)
+        if segment.modality == "audio" and segment.s3_key:
+            try:
+                await self._storage.delete_object(segment.s3_key)
+            except Exception as _:
+                # log in production
+                pass
         return True
 
     # ---------------------------------------------------------------------- #

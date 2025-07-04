@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 
 from new_backend_ruminate.domain.dream.entities.dream import Dream
-from new_backend_ruminate.domain.dream.entities.audio_segments import AudioSegment
+from new_backend_ruminate.domain.dream.entities.segments import Segment
 from new_backend_ruminate.domain.dream.repo import DreamRepository
 
 
@@ -110,8 +110,8 @@ class RDSDreamRepository(DreamRepository):
     # ───────────────────────────── segments CRUD ────────────────────────────── #
 
     async def create_segment(
-        self, user_id: UUID, segment: AudioSegment, session: AsyncSession
-    ) -> AudioSegment:
+        self, user_id: UUID, segment: Segment, session: AsyncSession
+    ) -> Segment:
         try:
             segment.user_id = user_id
             session.add(segment)
@@ -124,17 +124,17 @@ class RDSDreamRepository(DreamRepository):
 
     async def get_segment(
         self, user_id: UUID, did: UUID, sid: UUID, session: AsyncSession
-    ) -> Optional[AudioSegment]:
+    ) -> Optional[Segment]:
         result = await session.execute(
-            select(AudioSegment).where(
-                AudioSegment.id == sid, AudioSegment.dream_id == did, AudioSegment.user_id == user_id
+            select(Segment).where(
+                Segment.id == sid, Segment.dream_id == did, Segment.user_id == user_id
             )
         )
         return result.scalars().first()
 
     async def delete_segment(
         self, user_id: UUID, did: UUID, sid: UUID, session: AsyncSession
-    ) -> Optional[AudioSegment]:
+    ) -> Optional[Segment]:
         seg = await self.get_segment(user_id, did, sid, session)
         if not seg:
             return None
@@ -144,10 +144,10 @@ class RDSDreamRepository(DreamRepository):
 
     async def update_segment_transcript(
         self, user_id: UUID, did: UUID, sid: UUID, transcript: str, session: AsyncSession
-    ) -> Optional[AudioSegment]:
+    ) -> Optional[Segment]:
         await session.execute(
-            update(AudioSegment)
-            .where(AudioSegment.id == sid, AudioSegment.dream_id == did, AudioSegment.user_id == user_id)
+            update(Segment)
+            .where(Segment.id == sid, Segment.dream_id == did, Segment.user_id == user_id)
             .values(transcript=transcript, transcription_status='completed')
         )
         await session.commit()
@@ -155,10 +155,10 @@ class RDSDreamRepository(DreamRepository):
     
     async def update_segment_transcription_status(
         self, user_id: UUID, did: UUID, sid: UUID, status: str, session: AsyncSession
-    ) -> Optional[AudioSegment]:
+    ) -> Optional[Segment]:
         await session.execute(
-            update(AudioSegment)
-            .where(AudioSegment.id == sid, AudioSegment.dream_id == did, AudioSegment.user_id == user_id)
+            update(Segment)
+            .where(Segment.id == sid, Segment.dream_id == did, Segment.user_id == user_id)
             .values(transcription_status=status)
         )
         await session.commit()
@@ -176,7 +176,12 @@ class RDSDreamRepository(DreamRepository):
 
     async def get_audio_url(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[str]:
         dream = await self.get_dream(user_id, did, session)
-        return dream.segments[0].s3_key if dream and dream.segments else None
+        if dream and dream.segments:
+            # Return s3_key of first audio segment (text segments have s3_key=None)
+            for segment in dream.segments:
+                if segment.modality == "audio" and segment.s3_key:
+                    return segment.s3_key
+        return None
 
     async def get_status(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[str]:
         dream = await self.get_dream(user_id, did, session)
