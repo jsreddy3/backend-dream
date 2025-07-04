@@ -20,7 +20,7 @@ from new_backend_ruminate.dependencies import (
 from . import schemas
 from .schemas import (
     DreamCreate, DreamUpdate, DreamRead,
-    AudioSegmentCreate, AudioSegmentRead, TranscriptRead,
+    SegmentCreate, SegmentRead, TranscriptRead,
     UploadUrlResponse, VideoURLResponse,
     SummaryUpdate, GenerateSummaryResponse,
 )
@@ -102,22 +102,26 @@ async def get_transcript(
 
 # ───────────────────────────── segments ─────────────────────────────── #
 
-@router.post("/{did}/segments", response_model=AudioSegmentRead)
+@router.post("/{did}/segments", response_model=SegmentRead)
 async def add_segment(
     did: UUID,
-    seg: AudioSegmentCreate,
+    seg: SegmentCreate,
     tasks: BackgroundTasks,
     user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession   = Depends(get_session),
 ):
-    logger.info(f"Adding segment to dream {did}: order={seg.order}, filename={seg.filename}")
+    logger.info(f"Adding {seg.modality} segment to dream {did}: order={seg.order}")
     segment = await svc.add_segment(user_id, did, seg, db)
-    logger.info(f"Segment {segment.id} created, queuing transcription")
-    # queue background Deepgram transcription
-    tasks.add_task(svc.transcribe_segment_and_store, user_id, did, segment.id, seg.filename)
-    logger.info(f"Transcription task queued for segment {segment.id}")
-    print(f"Returning segment with transcript: {segment.transcript} and id {segment.id}")
+    logger.info(f"Segment {segment.id} created with modality={segment.modality}")
+    
+    # Only queue transcription for audio segments
+    if seg.modality == "audio":
+        logger.info(f"Queuing transcription for audio segment {segment.id}")
+        tasks.add_task(svc.transcribe_segment_and_store, user_id, did, segment.id, seg.filename)
+    else:
+        logger.info(f"Text segment {segment.id} already has transcript")
+    
     return segment
 
 @router.delete("/{did}/segments/{sid}", status_code=status.HTTP_204_NO_CONTENT)
@@ -131,7 +135,7 @@ async def delete_segment(
     if not ok:
         raise HTTPException(404, "Segment not found")
 
-@router.get("/{did}/segments", response_model=list[AudioSegmentRead])
+@router.get("/{did}/segments", response_model=list[SegmentRead])
 async def list_segments(
     did: UUID,
     user_id: UUID = Depends(get_current_user_id),
