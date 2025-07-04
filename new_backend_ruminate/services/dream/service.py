@@ -37,7 +37,8 @@ class DreamService:
         transcription_svc: Optional[TranscriptionService] = None,
         event_hub: Optional[EventStreamHub] = None,
         summary_llm: Optional[LLMService] = None,
-        interpretation_llm: Optional[LLMService] = None,
+        question_llm: Optional[LLMService] = None,
+        analysis_llm: Optional[LLMService] = None,
     ) -> None:
         self._repo = dream_repo
         self._storage = storage_repo
@@ -45,7 +46,8 @@ class DreamService:
         self._transcribe = transcription_svc
         self._hub = event_hub
         self._summary_llm = summary_llm
-        self._interpretation_llm = interpretation_llm
+        self._question_llm = question_llm
+        self._analysis_llm = analysis_llm
 
     # ─────────────────────────────── dreams ──────────────────────────────── #
 
@@ -68,6 +70,9 @@ class DreamService:
 
     async def update_summary(self, user_id: UUID, did: UUID, summary: str, session: AsyncSession) -> Optional[Dream]:
         return await self._repo.update_summary(user_id, did, summary, session)
+
+    async def update_additional_info(self, user_id: UUID, did: UUID, additional_info: str, session: AsyncSession) -> Optional[Dream]:
+        return await self._repo.update_additional_info(user_id, did, additional_info, session)
 
     async def generate_title_and_summary(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[Dream]:
         """Generate AI title and summary from dream transcript."""
@@ -157,8 +162,8 @@ Return a JSON object with 'title' and 'summary' fields."""}
         num_choices: int = 3
     ) -> List[InterpretationQuestion]:
         """Generate interpretation questions with multiple choice answers."""
-        if not self._interpretation_llm:
-            logger.warning("Interpretation LLM service not available, cannot generate questions")
+        if not self._question_llm:
+            logger.warning("Question LLM service not available, cannot generate questions")
             return []
         
         # Get the dream, transcript, and summary
@@ -225,8 +230,8 @@ Return a JSON array with this structure:
         }
         
         try:
-            # Generate questions using the interpretation LLM
-            result = await self._interpretation_llm.generate_structured_response(
+            # Generate questions using the question LLM
+            result = await self._question_llm.generate_structured_response(
                 messages=messages,
                 response_format={"type": "json_object"},
                 json_schema={"type": "object", "properties": {"questions": json_schema}, "required": ["questions"]}

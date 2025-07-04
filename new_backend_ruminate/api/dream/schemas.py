@@ -48,6 +48,7 @@ class DreamRead(DreamBase):
     created: datetime
     transcript: Optional[str]
     summary: Optional[str]
+    additional_info: Optional[str]
     state: str
     segments: List[SegmentRead] = []
     video_url: Optional[str] = None
@@ -157,3 +158,6 @@ class InterpretationAnswerRead(BaseModel):
             datetime: lambda dt: dt.isoformat(timespec="seconds") + "Z"
         }
     )
+
+class AdditionalInfoUpdate(BaseModel):
+    additional_info: str

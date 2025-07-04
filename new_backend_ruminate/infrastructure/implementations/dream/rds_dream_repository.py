@@ -88,6 +88,17 @@ class RDSDreamRepository(DreamRepository):
         await session.commit()
         return await self.get_dream(user_id, did, session)
 
+    async def update_additional_info(
+        self, user_id: UUID, did: UUID, additional_info: str, session: AsyncSession
+    ) -> Optional[Dream]:
+        await session.execute(
+            update(Dream)
+            .where(Dream.id == did, Dream.user_id == user_id)
+            .values(additional_info=additional_info)
+        )
+        await session.commit()
+        return await self.get_dream(user_id, did, session)
+
     async def set_state(
         self, user_id: UUID, did: UUID, state: str, session: AsyncSession
     ) -> Optional[Dream]:

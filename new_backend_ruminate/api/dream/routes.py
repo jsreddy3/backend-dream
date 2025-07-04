@@ -26,7 +26,7 @@ from .schemas import (
     SummaryUpdate, GenerateSummaryResponse,
     GenerateQuestionsRequest, GenerateQuestionsResponse,
     RecordAnswerRequest, InterpretationQuestionRead,
-    InterpretationAnswerRead,
+    InterpretationAnswerRead, AdditionalInfoUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -347,3 +347,19 @@ async def get_interpretation_answers(
     """Get all interpretation answers for a dream by the current user."""
     answers = await svc.get_interpretation_answers(user_id, did, db)
     return [InterpretationAnswerRead.model_validate(a) for a in answers]
+
+# ───────────────────────── Additional Info ─────────────────────────────── #
+
+@router.put("/{did}/additional-info")
+async def update_additional_info(
+    did: UUID,
+    info_update: AdditionalInfoUpdate,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Update additional information/notes about the dream."""
+    dream = await svc.update_additional_info(user_id, did, info_update.additional_info, db)
+    if not dream:
+        raise HTTPException(404, "Dream not found")
+    return DreamRead.model_validate(dream).model_dump()

@@ -52,16 +52,20 @@ _dream_summary_llm = OpenAILLM(
     api_key=settings().openai_api_key,
     model=settings().dream_summary_model,
 )
-_dream_interpretation_llm = OpenAILLM(
+_dream_question_llm = OpenAILLM(
     api_key=settings().openai_api_key,
-    model=settings().dream_interpretation_model,
+    model=settings().dream_question_model,
+)
+_dream_analysis_llm = OpenAILLM(
+    api_key=settings().openai_api_key,
+    model=settings().dream_analysis_model,
 )
 _ctx_builder = ContextBuilder()
 _conversation_service = ConversationService(_conversation_repo, _llm, _hub, _ctx_builder)
 _agent_service = AgentService(_conversation_repo, _llm, _hub, _ctx_builder)
 _storage_service = S3StorageRepository()
 _transcribe = DeepgramTranscriptionService()
-_dream_service = DreamService(_dream_repo, _storage_service, _user_repo, _transcribe, _hub, _dream_summary_llm, _dream_interpretation_llm)
+_dream_service = DreamService(_dream_repo, _storage_service, _user_repo, _transcribe, _hub, _dream_summary_llm, _dream_question_llm, _dream_analysis_llm)
 _video_queue = CeleryVideoQueueAdapter()
 
 # ─────────────────────── DI provider helpers ───────────────────── #
@@ -104,9 +108,13 @@ def get_dream_summary_llm() -> OpenAILLM:
     """Return the LLM instance specifically for dream summaries."""
     return _dream_summary_llm
 
-def get_dream_interpretation_llm() -> OpenAILLM:
-    """Return the LLM instance specifically for dream interpretation."""
-    return _dream_interpretation_llm
+def get_dream_question_llm() -> OpenAILLM:
+    """Return the LLM instance specifically for dream interpretation questions."""
+    return _dream_question_llm
+
+def get_dream_analysis_llm() -> OpenAILLM:
+    """Return the LLM instance specifically for dream analysis."""
+    return _dream_analysis_llm
 
 def get_video_queue() -> VideoQueuePort:
     """Return the singleton video queue adapter."""

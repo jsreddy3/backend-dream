@@ -53,7 +53,8 @@ class _Settings(BaseSettings):
     
     # Dream-specific LLM models (required, no fallback)
     dream_summary_model: str = Field(..., alias="DREAM_SUMMARY_MODEL")
-    dream_interpretation_model: str = Field(..., alias="DREAM_INTERPRETATION_MODEL")
+    dream_question_model: str = Field(..., alias="DREAM_QUESTION_MODEL")
+    dream_analysis_model: str = Field(..., alias="DREAM_ANALYSIS_MODEL")
 
     # ------------------------------------------------------------------ #
     # Misc                                                                #
