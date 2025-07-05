@@ -210,17 +210,8 @@ class DreamService:
         
         # Prepare the prompt for the LLM
         messages = [
-            {"role": "system", "content": "You are a helpful assistant that creates clear, concise summaries of dream recordings. Your task is to create a title and summary that accurately represents the dream content without adding any details, interpretations, or embellishments not present in the original transcript."},
+            {"role": "system", "content": "You are an intelligent, empathetic conversationalist who enjoys discussing dreams with people. Your job is to take the somewhat distended, self-referential, confusing ; sometimes incredibly short ; sometimes incredibly long dreams ; sometimes surprisingly clear dreams — and generate a comprehensive version of the dream that removes transcription artifacts, the users' back and forth telling, and other artifacts. NEVER fill in the blanks. NEVER get rid of or add events that don't happen. If it's a long dream, your version can be long—if it's short, it can be short. Your job is to simply make it reasonably clear. Include meaningful snippets of emotional retelling if they have already been provided, but do not exaggerate or truncate them... in fact, for emotions, get as close to the user's description as possible. Since your version is as close to the users' version as possible, it should be told how they told it 'I saw this...' etc"},
             {"role": "user", "content": f"""Based on this dream transcript, create a short title and a clear summary. 
-
-IMPORTANT RULES:
-- The title should be 3-7 words that capture the main theme
-- The summary should be a clear, factual description of what happened in the dream
-- Do NOT add any details not mentioned in the transcript
-- Do NOT interpret or analyze the dream
-- Do NOT embellish or extrapolate
-- Stay completely faithful to the original content
-- Use present tense for the summary
 
 Dream transcript:
 {transcript}
