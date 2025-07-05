@@ -74,6 +74,86 @@ class DreamService:
 
     async def update_additional_info(self, user_id: UUID, did: UUID, additional_info: str, session: AsyncSession) -> Optional[Dream]:
         return await self._repo.update_additional_info(user_id, did, additional_info, session)
+    
+    async def _wait_for_transcription_and_consolidate(self, user_id: UUID, did: UUID, max_wait_seconds: int = 30) -> Optional[str]:
+        """Wait for all segments to be transcribed and consolidate into a single transcript.
+        Returns the consolidated transcript or None if no segments or timeout."""
+        from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
+        
+        check_interval = 0.5
+        waited = 0
+        
+        while waited < max_wait_seconds:
+            async with session_scope() as session:
+                dream = await self._repo.get_dream(user_id, did, session)
+                if not dream:
+                    logger.error(f"Dream {did} not found")
+                    return None
+                
+                if not dream.segments:
+                    logger.warning(f"Dream {did} has no segments")
+                    return ""  # Return empty string for dreams with no segments
+                
+                # Check transcription status of all segments
+                pending_segments = []
+                processing_segments = []
+                failed_segments = []
+                completed_segments = []
+                
+                for i, seg in enumerate(dream.segments):
+                    status = seg.transcription_status
+                    logger.debug(f"  Segment {i} (order={seg.order}): status={status}, has_transcript={bool(seg.transcript)}")
+                    
+                    if status == "pending":
+                        pending_segments.append(i)
+                    elif status == "processing":
+                        processing_segments.append(i)
+                    elif status == "failed":
+                        failed_segments.append(i)
+                    elif status == "completed":
+                        completed_segments.append(i)
+                
+                # Check if all segments are done (no pending or processing)
+                if not pending_segments and not processing_segments:
+                    # Check if any failed
+                    if failed_segments:
+                        logger.error(f"Dream {did} has {len(failed_segments)} failed segment(s): {failed_segments}")
+                        # Continue with partial transcripts rather than failing completely
+                    
+                    # Sort segments by order and concatenate transcripts
+                    sorted_segments = sorted(dream.segments, key=lambda s: s.order)
+                    transcript_parts = []
+                    
+                    for seg in sorted_segments:
+                        if seg.transcript:
+                            transcript_parts.append(seg.transcript)
+                    
+                    # Join transcripts with space
+                    combined_transcript = " ".join(transcript_parts)
+                    logger.info(f"Combined {len(transcript_parts)} segment transcripts into dream transcript")
+                    return combined_transcript
+                else:
+                    logger.debug(f"Waiting for transcription... {len(pending_segments)} pending, {len(processing_segments)} processing")
+            
+            await asyncio.sleep(check_interval)
+            waited += check_interval
+        
+        logger.error(f"Timeout waiting for transcription of dream {did}")
+        
+        # On timeout, return whatever we have
+        async with session_scope() as session:
+            dream = await self._repo.get_dream(user_id, did, session)
+            if dream and dream.segments:
+                sorted_segments = sorted(dream.segments, key=lambda s: s.order)
+                transcript_parts = []
+                for seg in sorted_segments:
+                    if seg.transcript:
+                        transcript_parts.append(seg.transcript)
+                if transcript_parts:
+                    logger.warning(f"Returning partial transcript after timeout: {len(transcript_parts)} segments")
+                    return " ".join(transcript_parts)
+        
+        return None
 
     async def generate_title_and_summary(self, user_id: UUID, did: UUID) -> Optional[Dream]:
         """Generate AI title and summary from dream transcript."""
@@ -108,11 +188,23 @@ class DreamService:
                 await self._repo.update_summary_status(user_id, did, GenerationStatus.FAILED, session)
                 return None
             
-            transcript = await self._repo.get_transcript(user_id, did, session)
+            # First check if dream already has a transcript
+            transcript = dream.transcript
+            
+            # If no transcript yet, try to wait for segments to be transcribed
             if not transcript:
-                logger.error(f"No transcript available for dream {did}")
-                await self._repo.update_summary_status(user_id, did, GenerationStatus.FAILED, session)
-                return None
+                logger.info(f"No transcript yet for dream {did}, waiting for segment transcriptions...")
+                transcript = await self._wait_for_transcription_and_consolidate(user_id, did)
+                
+                if transcript:
+                    # Update the dream with the consolidated transcript
+                    dream.transcript = transcript
+                    await session.commit()
+                    logger.info(f"Updated dream {did} with consolidated transcript")
+                else:
+                    logger.error(f"No transcript available for dream {did} after waiting")
+                    await self._repo.update_summary_status(user_id, did, GenerationStatus.FAILED, session)
+                    return None
         
         logger.info(f"Generating title and summary for dream {did}")
         
@@ -600,85 +692,29 @@ Create a thoughtful interpretation."""}
         
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         
-        # Wait for all segments to be transcribed
-        max_wait_seconds = 30
-        check_interval = 0.5
-        waited = 0
+        # Use the shared helper to wait for transcription and consolidate
+        transcript = await self._wait_for_transcription_and_consolidate(user_id, did)
         
-        while waited < max_wait_seconds:
-            async with session_scope() as session:
-                dream = await self._repo.get_dream(user_id, did, session)
-                if not dream:
-                    raise ValueError(f"Dream {did} not found")
-                
-                if not dream.segments:
-                    logger.error(f"Dream {did} has no segments")
-                    raise ValueError(f"Dream {did} has no segments")
-                
-                # Check transcription status of all segments
-                pending_segments = []
-                processing_segments = []
-                failed_segments = []
-                completed_segments = []
-                
-                for i, seg in enumerate(dream.segments):
-                    status = seg.transcription_status
-                    logger.info(f"  Segment {i} (order={seg.order}): status={status}, has_transcript={bool(seg.transcript)}")
-                    
-                    if status == "pending":
-                        pending_segments.append(i)
-                    elif status == "processing":
-                        processing_segments.append(i)
-                    elif status == "failed":
-                        failed_segments.append(i)
-                    elif status == "completed":
-                        completed_segments.append(i)
-                
-                # Check if all segments are done (no pending or processing)
-                if not pending_segments and not processing_segments:
-                    # Check if any failed
-                    if failed_segments:
-                        logger.error(f"Dream {did} has {len(failed_segments)} failed segment(s): {failed_segments}")
-                        raise ValueError(f"Cannot finish dream: {len(failed_segments)} segment(s) failed transcription")
-                    
-                    # All segments completed successfully
-                    logger.info(f"All {len(completed_segments)} segments successfully transcribed for dream {did}")
-                    break
-                else:
-                    logger.info(f"Waiting for transcription... {len(pending_segments)} pending, {len(processing_segments)} processing")
-            
-            await asyncio.sleep(check_interval)
-            waited += check_interval
-        
-        if waited >= max_wait_seconds:
-            logger.error(f"Timeout waiting for transcription of dream {did}")
-            raise TimeoutError(f"Transcription did not complete within {max_wait_seconds} seconds")
-        
-        # Concatenate all segment transcripts and update dream
+        # Update dream with transcript and state
         async with session_scope() as session:
             dream = await self._repo.get_dream(user_id, did, session)
-            if dream and dream.segments:
-                # Sort segments by order and concatenate transcripts
-                sorted_segments = sorted(dream.segments, key=lambda s: s.order)
-                transcript_parts = []
-                
-                for seg in sorted_segments:
-                    if seg.transcript:
-                        transcript_parts.append(seg.transcript)
-                
-                # Join transcripts with space
-                combined_transcript = " ".join(transcript_parts)
-                logger.info(f"Combined {len(transcript_parts)} segment transcripts into dream transcript")
-                
+            if not dream:
+                raise ValueError(f"Dream {did} not found")
+            
+            if transcript is not None:
                 # Update dream transcript and state
-                dream.transcript = combined_transcript
+                dream.transcript = transcript
                 dream.state = DreamStatus.TRANSCRIBED.value
                 await session.commit()
-                logger.info(f"Updated dream {did} with combined transcript and state to TRANSCRIBED")
+                logger.info(f"Updated dream {did} with transcript and state to TRANSCRIBED")
             else:
-                # Just update state if no segments or dream not found
-                await self._repo.set_state(user_id, did, DreamStatus.TRANSCRIBED.value, session)
-                logger.info(f"Updated dream {did} state to TRANSCRIBED")
+                # No segments or failed to get transcript
+                if not dream.segments:
+                    raise ValueError(f"Dream {did} has no segments")
+                else:
+                    raise ValueError(f"Failed to get transcript for dream {did}")
+                
+        # Note: Summary generation is now handled after this method returns
         
         # Trigger summary generation after transcription is complete
         logger.info(f"Triggering summary generation for dream {did}")
@@ -765,7 +801,7 @@ Create a thoughtful interpretation."""}
                 return {"job_id": None, "status": None, "video_url": None}
             
             # If we have a job ID and status is not final, check with Celery
-            if dream.video_job_id and dream.video_status in [VideoStatus.QUEUED, VideoStatus.PROCESSING]:
+            if dream.video_job_id and dream.video_status in [GenerationStatus.QUEUED, GenerationStatus.PROCESSING]:
                 video_queue = CeleryVideoQueueAdapter()
                 job_status = await video_queue.get_job_status(dream.video_job_id)
                 
