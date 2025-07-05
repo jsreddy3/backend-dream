@@ -44,14 +44,7 @@ class RDSDreamRepository(DreamRepository):
         if user_id is not None:
             query = query.where(Dream.user_id == user_id)
         result = await session.execute(query)
-        dream = result.scalars().first()
-        
-        if dream:
-            print(f"🔍 RDSDreamRepository.get_dream({did}): title='{dream.title}', summary={'present' if dream.summary else 'None'}, user_id={user_id}")
-        else:
-            print(f"🔍 RDSDreamRepository.get_dream({did}): Dream not found for user_id={user_id}")
-            
-        return dream
+        return result.scalars().first()
 
     async def list_dreams_by_user(self, user_id: UUID, session: AsyncSession) -> List[Dream]:
         result = await session.execute(
@@ -87,28 +80,13 @@ class RDSDreamRepository(DreamRepository):
     async def update_title_and_summary(
         self, user_id: UUID, did: UUID, title: str, summary: str, session: AsyncSession
     ) -> Optional[Dream]:
-        print(f"🔍 RDSDreamRepository.update_title_and_summary: Updating dream {did}")
-        print(f"   - user_id: {user_id}")
-        print(f"   - new title: '{title}'")
-        print(f"   - new summary length: {len(summary)}")
-        
-        result = await session.execute(
+        await session.execute(
             update(Dream)
             .where(Dream.id == did, Dream.user_id == user_id)
             .values(title=title, summary=summary)
         )
-        print(f"   - Rows updated: {result.rowcount}")
-        
         await session.commit()
-        
-        updated_dream = await self.get_dream(user_id, did, session)
-        if updated_dream:
-            print(f"   - Verified title after update: '{updated_dream.title}'")
-            print(f"   - Verified summary exists: {updated_dream.summary is not None}")
-        else:
-            print(f"   - ERROR: Could not retrieve dream after update!")
-            
-        return updated_dream
+        return await self.get_dream(user_id, did, session)
 
     async def update_additional_info(
         self, user_id: UUID, did: UUID, additional_info: str, session: AsyncSession
