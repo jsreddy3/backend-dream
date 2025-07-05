@@ -243,7 +243,7 @@ Return a JSON object with 'title' and 'summary' fields."""}
                 json_schema=json_schema
             )
             
-            logger.info(f"Generated title: {result.get('title')}, summary length: {len(result.get('summary', ''))}")
+            logger.info(f"Generated title: {result.get('title')}, summary: {result.get('summary')}")
             
             # Update the dream with generated title and summary
             async with session_scope() as session:
