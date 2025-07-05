@@ -208,6 +208,14 @@ class DreamService:
         
         logger.info(f"Generating title and summary for dream {did}")
         
+        # Print input transcript for visibility
+        print(f"\n=== Title/Summary Generation Input ===")
+        print(f"Dream ID: {did}")
+        print(f"Transcript length: {len(transcript)} characters")
+        print(f"\nFull Transcript:")
+        print(transcript)
+        print(f"=== End Input ===\n")
+        
         # Prepare the prompt for the LLM
         messages = [
             {"role": "system", "content": "You are an intelligent, empathetic conversationalist who enjoys discussing dreams with people. Your job is to take the somewhat distended, self-referential, confusing ; sometimes incredibly short ; sometimes incredibly long dreams ; sometimes surprisingly clear dreams — and generate a comprehensive version of the dream that removes transcription artifacts, the users' back and forth telling, and other artifacts. NEVER fill in the blanks. NEVER get rid of or add events that don't happen. If it's a long dream, your version can be long—if it's short, it can be short. Your job is to simply make it reasonably clear. Include meaningful snippets of emotional retelling if they have already been provided, but do not exaggerate or truncate them... in fact, for emotions, get as close to the user's description as possible. Since your version is as close to the users' version as possible, it should be told how they told it 'I saw this...' etc"},
@@ -243,7 +251,15 @@ Return a JSON object with 'title' and 'summary' fields."""}
                 json_schema=json_schema
             )
             
-            logger.info(f"Generated title: {result.get('title')}, summary: {result.get('summary')}")
+            logger.info(f"Generated title: {result.get('title')}, summary length: {len(result.get('summary', ''))}")
+            
+            # Print to console for visibility
+            print(f"\n=== Generated Title and Summary ===")
+            print(f"Dream ID: {did}")
+            print(f"Title: {result.get('title')}")
+            print(f"\nSummary:")
+            print(result.get('summary'))
+            print(f"=== End Summary ===\n")
             
             # Update the dream with generated title and summary
             async with session_scope() as session:
