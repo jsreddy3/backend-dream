@@ -23,6 +23,7 @@ from new_backend_ruminate.infrastructure.llm.openai_llm import OpenAILLM
 from new_backend_ruminate.services.dream.service import DreamService
 from new_backend_ruminate.services.conversation.service import ConversationService
 from new_backend_ruminate.infrastructure.transcription.deepgram import DeepgramTranscriptionService
+from new_backend_ruminate.infrastructure.transcription.whisper import WhisperTranscriptionService
 from new_backend_ruminate.services.agent.service import AgentService
 from new_backend_ruminate.context.builder import ContextBuilder
 from new_backend_ruminate.infrastructure.db.bootstrap import get_session as get_db_session
@@ -64,7 +65,7 @@ _ctx_builder = ContextBuilder()
 _conversation_service = ConversationService(_conversation_repo, _llm, _hub, _ctx_builder)
 _agent_service = AgentService(_conversation_repo, _llm, _hub, _ctx_builder)
 _storage_service = S3StorageRepository()
-_transcribe = DeepgramTranscriptionService()
+_transcribe = WhisperTranscriptionService()
 _dream_service = DreamService(_dream_repo, _storage_service, _user_repo, _transcribe, _hub, _dream_summary_llm, _dream_question_llm, _dream_analysis_llm)
 _video_queue = CeleryVideoQueueAdapter()
 
