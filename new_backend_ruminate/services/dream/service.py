@@ -164,22 +164,7 @@ class DreamService:
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
         
-        # Try to atomically start summary generation
-        async with session_scope() as session:
-            acquired = await self._repo.try_start_summary_generation(user_id, did, session)
-            if not acquired:
-                logger.info(f"Summary generation already in progress for dream {did}")
-                # Return the dream so caller can see current state
-                return await self._repo.get_dream(user_id, did, session)
-        
-        # Update status to processing
-        try:
-            async with session_scope() as session:
-                await self._repo.update_summary_status(user_id, did, GenerationStatus.PROCESSING, session)
-        except Exception as e:
-            logger.error(f"Failed to update summary status to processing: {str(e)}")
-        
-        # Get the dream and transcript
+        # FIRST SESSION: Get initial dream data and close session
         transcript = None
         async with session_scope() as session:
             dream = await self._repo.get_dream(user_id, did, session)
@@ -188,23 +173,31 @@ class DreamService:
                 await self._repo.update_summary_status(user_id, did, GenerationStatus.FAILED, session)
                 return None
             
-            # First check if dream already has a transcript
+            # Check if dream already has a transcript
             transcript = dream.transcript
+
+        # IF NO TRANSCRIPT: Wait WITHOUT any session open
+        if not transcript:
+            logger.info(f"No transcript yet for dream {did}, waiting for segment transcriptions...")
+            transcript = await self._wait_for_transcription_and_consolidate(user_id, did)
             
-            # If no transcript yet, try to wait for segments to be transcribed
-            if not transcript:
-                logger.info(f"No transcript yet for dream {did}, waiting for segment transcriptions...")
-                transcript = await self._wait_for_transcription_and_consolidate(user_id, did)
-                
-                if transcript:
-                    # Update the dream with the consolidated transcript
-                    dream.transcript = transcript
-                    await session.commit()
-                    logger.info(f"Updated dream {did} with consolidated transcript")
-                else:
-                    logger.error(f"No transcript available for dream {did} after waiting")
+            # SECOND SESSION: Update dream with transcript or handle failure
+            if transcript:
+                async with session_scope() as session:
+                    dream = await self._repo.get_dream(user_id, did, session)
+                    if dream:
+                        dream.transcript = transcript
+                        await session.commit()
+                        logger.info(f"Updated dream {did} with consolidated transcript")
+                    else:
+                        # Edge case: dream was deleted while we were waiting
+                        logger.error(f"Dream {did} no longer exists after waiting for transcription")
+                        return None
+            else:
+                logger.error(f"No transcript available for dream {did} after waiting")
+                async with session_scope() as session:
                     await self._repo.update_summary_status(user_id, did, GenerationStatus.FAILED, session)
-                    return None
+                return None
         
         logger.info(f"Generating title and summary for dream {did}")
         
@@ -872,5 +865,4 @@ Create a thoughtful interpretation."""}
                     await self._repo.update_segment_transcription_status(user_id, did, sid, "failed", session)
             except Exception as update_error:
                 logger.error(f"Failed to update segment status to failed: {str(update_error)}")
-            raise
-                
+            raise 
