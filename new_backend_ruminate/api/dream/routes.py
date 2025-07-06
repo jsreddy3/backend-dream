@@ -267,9 +267,12 @@ async def generate_summary(
     logger.info(f"Generate summary endpoint called for dream {did}")
     
     dream = await svc.generate_title_and_summary(user_id, did)
-    if not dream:
-        raise HTTPException(400, "Failed to generate summary. Check if transcript is available.")
-    
+    if (not dream) or (dream.title is None) or (dream.summary is None):
+        raise HTTPException(
+            400,
+            "Failed to generate summary. Check if transcript is available or if the AI generation returned empty values.",
+        )
+
     return GenerateSummaryResponse(title=dream.title, summary=dream.summary)
 
 @router.patch("/{did}/summary")

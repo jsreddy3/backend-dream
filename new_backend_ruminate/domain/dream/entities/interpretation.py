@@ -15,7 +15,7 @@ class InterpretationQuestion(Base):
     dream_id = Column(UUID(as_uuid=True), ForeignKey("dreams.id", ondelete="CASCADE"), nullable=False)
     question_text = Column(Text, nullable=False)
     question_order = Column(Integer, nullable=False)
-    created = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
     dream = relationship("Dream", back_populates="interpretation_questions")

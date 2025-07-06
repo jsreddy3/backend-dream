@@ -38,6 +38,7 @@ class DreamBase(BaseModel):
 class DreamCreate(DreamBase):
     id: UUID | None = None          # accept optional id from client
     title: str
+    created_at: datetime
 
 class DreamUpdate(BaseModel):
     title: Optional[str] = None
@@ -45,7 +46,7 @@ class DreamUpdate(BaseModel):
 
 class DreamRead(DreamBase):
     id: UUID
-    created: datetime
+    created_at: Optional[datetime] = None
     transcript: Optional[str]
     summary: Optional[str]
     summary_status: Optional[str]
@@ -72,8 +73,8 @@ class DreamRead(DreamBase):
         data = super().model_dump(**kwargs)
         data['video_s3_key'] = self.video_s3_key
         # Fix datetime format for iOS compatibility
-        if 'created' in data and isinstance(data['created'], datetime):
-            data['created'] = data['created'].isoformat(timespec="seconds") + "Z"
+        if 'created_at' in data and isinstance(data['created_at'], datetime):
+            data['created_at'] = data['created_at'].isoformat(timespec="seconds") + "Z"
         # Fix segment field names for iOS compatibility
         if 'segments' in data:
             for segment in data['segments']:

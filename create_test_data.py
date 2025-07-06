@@ -24,7 +24,7 @@ async def create_test_data():
             google_sub='test_google_sub_123',
             email='test@example.com',
             name='Test User',
-            created=datetime.utcnow()
+            created_at=datetime.utcnow()
         )
         
         # Check if user already exists
@@ -48,7 +48,7 @@ async def create_test_data():
             but no one answered. I decided to enter anyway. Inside, I found a table set for two, 
             with fresh bread and soup still steaming. It felt like someone had just left moments ago.""",
             state="completed",
-            created=datetime.utcnow()
+            created_at=datetime.utcnow()
         )
         
         # Check if dream already exists

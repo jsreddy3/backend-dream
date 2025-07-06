@@ -57,7 +57,12 @@ class DreamService:
         return await self._repo.list_dreams_by_user(user_id, session)
 
     async def create_dream(self, user_id: UUID, payload, session: AsyncSession) -> Dream:
-        dream = Dream(id=payload.id or uuid.uuid4(), title=payload.title)
+        # Ensure created_at is timezone-naive (UTC) because DB column is timezone-naive
+        created_at = payload.created_at
+        if created_at.tzinfo is not None:
+            from datetime import timezone
+            created_at = created_at.astimezone(timezone.utc).replace(tzinfo=None)
+        dream = Dream(id=payload.id or uuid.uuid4(), title=payload.title, created_at=created_at)
         return await self._repo.create_dream(user_id, dream, session)
 
     async def get_dream(self, user_id: UUID, did: UUID, session: AsyncSession) -> Optional[Dream]:

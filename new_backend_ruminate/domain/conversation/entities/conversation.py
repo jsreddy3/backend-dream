@@ -31,7 +31,8 @@ class Conversation(Base):
     """
 
     __tablename__ = "conversations"
-    __table_args__ = (UniqueConstraint("id", name="uq_conversation_id"),)
+    # No extra unique constraint needed; primary key is already unique
+    __table_args__ = ()
 
     id: Mapped[PYUUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid4

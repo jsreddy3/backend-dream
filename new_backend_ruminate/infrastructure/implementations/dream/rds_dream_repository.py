@@ -51,7 +51,7 @@ class RDSDreamRepository(DreamRepository):
             select(Dream)
             .where(Dream.user_id == user_id)
             .options(selectinload(Dream.segments))
-            .order_by(Dream.created.desc())
+            .order_by(Dream.created_at.desc())
         )
         return list(result.scalars().all())
 
