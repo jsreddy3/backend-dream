@@ -134,9 +134,8 @@ async def delete_segment(
     did: UUID, sid: UUID,
     user_id: UUID = Depends(get_current_user_id),
     svc: DreamService  = Depends(get_dream_service),
-    db: AsyncSession   = Depends(get_session),
 ):
-    ok = await svc.delete_segment(user_id, did, sid, db)
+    ok = await svc.delete_segment(user_id, did, sid)
     if not ok:
         raise HTTPException(404, "Segment not found")
 
