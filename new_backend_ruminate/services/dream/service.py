@@ -652,13 +652,18 @@ Create a thoughtful interpretation."""}
             )
         return await self._repo.create_segment(user_id, seg, session)
 
-    async def delete_segment(self, user_id: UUID, did: UUID, sid: UUID, session: AsyncSession) -> bool:
-        # need s3 key before deletion
-        segment = await self._repo.get_segment(user_id, did, sid, session)
-        if not segment:
-            return False
-        await self._repo.delete_segment(user_id, did, sid, session)
-        # best-effort delete from storage (only for audio segments)
+    async def delete_segment(self, user_id: UUID, did: UUID, sid: UUID) -> bool:
+        from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
+        
+        # Get segment info and delete from DB
+        segment = None
+        async with session_scope() as session:
+            segment = await self._repo.get_segment(user_id, did, sid, session)
+            if not segment:
+                return False
+            await self._repo.delete_segment(user_id, did, sid, session)
+        
+        # Best-effort delete from storage (only for audio segments) - session is closed
         if segment.modality == "audio" and segment.s3_key:
             try:
                 await self._storage.delete_object(segment.s3_key)
@@ -784,33 +789,46 @@ Create a thoughtful interpretation."""}
         from new_backend_ruminate.infrastructure.celery.adapter import CeleryVideoQueueAdapter
         from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
         
+        # Get dream info and close session
+        video_job_id = None
+        video_status = None
+        video_url = None
+        
         async with session_scope() as session:
             dream = await self._repo.get_dream(user_id, dream_id, session)
             if not dream:
                 return {"job_id": None, "status": None, "video_url": None}
             
-            # If we have a job ID and status is not final, check with Celery
-            if dream.video_job_id and dream.video_status in [GenerationStatus.QUEUED, GenerationStatus.PROCESSING]:
-                video_queue = CeleryVideoQueueAdapter()
-                job_status = await video_queue.get_job_status(dream.video_job_id)
-                
-                # Update status if it changed
-                if job_status["status"] == "PROCESSING" and dream.video_status == GenerationStatus.QUEUED:
-                    dream.video_status = GenerationStatus.PROCESSING
-                    await session.commit()
-                
-                return {
-                    "job_id": dream.video_job_id,
-                    "status": dream.video_status,
-                    "video_url": dream.video_url
-                }
+            video_job_id = dream.video_job_id
+            video_status = dream.video_status
+            video_url = dream.video_url
+        
+        # If we have a job ID and status is not final, check with Celery (without session open)
+        if video_job_id and video_status in [GenerationStatus.QUEUED, GenerationStatus.PROCESSING]:
+            video_queue = CeleryVideoQueueAdapter()
+            job_status = await video_queue.get_job_status(video_job_id)
             
-            # Return stored status
+            # Update status if it changed - reopen session briefly
+            if job_status["status"] == "PROCESSING" and video_status == GenerationStatus.QUEUED:
+                async with session_scope() as session:
+                    dream = await self._repo.get_dream(user_id, dream_id, session)
+                    if dream:
+                        dream.video_status = GenerationStatus.PROCESSING
+                        await session.commit()
+                        video_status = GenerationStatus.PROCESSING
+            
             return {
-                "job_id": dream.video_job_id,
-                "status": dream.video_status,
-                "video_url": dream.video_url
+                "job_id": video_job_id,
+                "status": video_status,
+                "video_url": video_url
             }
+        
+        # Return stored status
+        return {
+            "job_id": video_job_id,
+            "status": video_status,
+            "video_url": video_url
+        }
 
     # ---------------------------------------------------------------------- #
     # Background helpers                                                     #
