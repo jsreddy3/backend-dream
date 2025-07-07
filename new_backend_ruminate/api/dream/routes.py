@@ -18,6 +18,8 @@ from new_backend_ruminate.dependencies import (
     get_storage_service,
     get_current_user_id,
 )
+import time
+from sqlalchemy import text
 from . import schemas
 from .schemas import (
     DreamCreate, DreamUpdate, DreamRead,
@@ -45,8 +47,9 @@ async def list_dreams(
     user_id: UUID = Depends(get_current_user_id)
 ):
     dreams = await svc.list_dreams(user_id, db)
-    # Manually serialize to include video_s3_key
-    return [DreamRead.model_validate(dream).model_dump() for dream in dreams]
+    
+    result = [DreamRead.model_validate(dream).model_dump() for dream in dreams]
+    return result
 
 @router.post("/", response_model=DreamRead, status_code=status.HTTP_201_CREATED)
 async def create_dream(

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 from sqlalchemy import select, update, delete, func, insert, and_, or_
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 from sqlalchemy.exc import IntegrityError
 
 from new_backend_ruminate.domain.dream.entities.dream import Dream
@@ -40,20 +40,38 @@ class RDSDreamRepository(DreamRepository):
         (useful for internal services / admin paths). Otherwise the dream **must** belong to the
         given ``user_id``.
         """
-        query = select(Dream).where(Dream.id == did).options(selectinload(Dream.segments))
+        # Use joinedload for single entity fetch (more efficient than selectinload)
+        query = select(Dream).where(Dream.id == did).options(joinedload(Dream.segments))
         if user_id is not None:
             query = query.where(Dream.user_id == user_id)
         result = await session.execute(query)
-        return result.scalars().first()
+        return result.scalars().unique().first()
 
     async def list_dreams_by_user(self, user_id: UUID, session: AsyncSession) -> List[Dream]:
-        result = await session.execute(
+        import time
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Build the query
+        query = (
             select(Dream)
             .where(Dream.user_id == user_id)
             .options(selectinload(Dream.segments))
             .order_by(Dream.created_at.desc())
         )
-        return list(result.scalars().all())
+        
+        # Log the SQL that will be executed
+        logger.info(f"Executing query for user {user_id}")
+        
+        # Execute and time the query
+        start = time.time()
+        result = await session.execute(query)
+        dreams = list(result.scalars().all())
+        end = time.time()
+        
+        logger.info(f"Query execution took {(end - start) * 1000:.2f}ms, returned {len(dreams)} dreams")
+        
+        return dreams
 
     async def update_title(
         self, user_id: UUID, did: UUID, title: str, session: AsyncSession
@@ -169,6 +187,17 @@ class RDSDreamRepository(DreamRepository):
         await session.delete(seg)
         await session.commit()
         return seg
+    
+    async def list_segments_by_dream(
+        self, user_id: UUID, did: UUID, session: AsyncSession
+    ) -> List[Segment]:
+        """Efficiently fetch just the segments for a dream without loading the entire dream entity."""
+        result = await session.execute(
+            select(Segment)
+            .where(Segment.dream_id == did, Segment.user_id == user_id)
+            .order_by(Segment.order)
+        )
+        return list(result.scalars().all())
 
     async def update_segment_transcript(
         self, user_id: UUID, did: UUID, sid: UUID, transcript: str, session: AsyncSession
@@ -339,11 +368,14 @@ class RDSDreamRepository(DreamRepository):
         
         await session.commit()
         
-        # Refresh all questions to get their IDs and relationships
-        for question in questions:
-            await session.refresh(question, attribute_names=["choices"])
-        
-        return questions
+        # Re-query with eager loading instead of N+1 refreshes
+        result = await session.execute(
+            select(InterpretationQuestion)
+            .where(InterpretationQuestion.dream_id == did)
+            .options(selectinload(InterpretationQuestion.choices))
+            .order_by(InterpretationQuestion.question_order)
+        )
+        return list(result.scalars().all())
     
     async def get_interpretation_questions(
         self, user_id: UUID, did: UUID, session: AsyncSession

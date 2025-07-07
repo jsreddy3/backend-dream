@@ -12,7 +12,7 @@ class InterpretationQuestion(Base):
     __tablename__ = "interpretation_questions"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    dream_id = Column(UUID(as_uuid=True), ForeignKey("dreams.id", ondelete="CASCADE"), nullable=False)
+    dream_id = Column(UUID(as_uuid=True), ForeignKey("dreams.id", ondelete="CASCADE"), nullable=False, index=True)
     question_text = Column(Text, nullable=False)
     question_order = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -52,7 +52,7 @@ class InterpretationAnswer(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     question_id = Column(UUID(as_uuid=True), ForeignKey("interpretation_questions.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    selected_choice_id = Column(UUID(as_uuid=True), ForeignKey("interpretation_choices.id", ondelete="SET NULL"), nullable=True)
+    selected_choice_id = Column(UUID(as_uuid=True), ForeignKey("interpretation_choices.id", ondelete="SET NULL"), nullable=True, index=True)
     custom_answer = Column(Text, nullable=True)
     answered_at = Column(DateTime, default=datetime.utcnow)
     

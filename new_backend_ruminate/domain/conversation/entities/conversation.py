@@ -14,6 +14,8 @@ from sqlalchemy import (
     JSON,
     String,
     UniqueConstraint,
+    ForeignKey,
+    Index,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,14 +39,18 @@ class Conversation(Base):
     id: Mapped[PYUUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid4
     )
+    # Add user association for proper multi-tenancy
+    user_id: Mapped[Optional[PYUUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), index=True, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime, default=datetime.utcnow, nullable=False, index=True
     )
 
     meta_data: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    root_message_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True))
+    root_message_id: Mapped[Optional[UUID]] = mapped_column(UUID(as_uuid=True), index=True)
     active_thread_ids: Mapped[list[UUID]] = mapped_column(JSON, default=list)
 
     type: Mapped[ConversationType] = mapped_column(

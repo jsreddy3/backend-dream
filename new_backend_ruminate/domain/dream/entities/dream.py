@@ -3,7 +3,7 @@ from enum import Enum
 from uuid import uuid4, UUID as PYUUID
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy import (
-    Column, DateTime, String, Text, JSON
+    Column, DateTime, String, Text, JSON, Index, desc
 )
 from sqlalchemy.orm import relationship
 from new_backend_ruminate.infrastructure.db.meta import Base
@@ -23,10 +23,10 @@ class GenerationStatus(str, Enum):
 class Dream(Base):
     __tablename__ = "dreams"
     id         = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    user_id    = Column(UUID(as_uuid=True), nullable=True)
+    user_id    = Column(UUID(as_uuid=True), nullable=True, index=True)
     transcript = Column(Text, nullable=True)
-    state      = Column(String(20), default=DreamStatus.PENDING.value, nullable=False)
-    created_at    = Column(DateTime, default=datetime.utcnow)
+    state      = Column(String(20), default=DreamStatus.PENDING.value, nullable=False, index=True)
+    created_at    = Column(DateTime, default=datetime.utcnow, index=True)
     title      = Column(String(255), nullable=True)
     summary    = Column(Text, nullable=True)
     summary_status = Column(String(20), nullable=True)  # GenerationStatus enum
@@ -61,4 +61,9 @@ class Dream(Base):
         back_populates="dream",
         cascade="all, delete-orphan",
         order_by="InterpretationQuestion.question_order",
+    )
+    
+    __table_args__ = (
+        # Composite index for the most common query pattern
+        Index('ix_dreams_user_created', 'user_id', desc('created_at')),
     )
