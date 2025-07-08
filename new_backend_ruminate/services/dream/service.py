@@ -671,6 +671,37 @@ Create a thoughtful interpretation."""}
                 # log in production
                 pass
         return True
+    
+    async def delete_dream(self, user_id: UUID, did: UUID, db: AsyncSession) -> bool:
+        """Delete a dream and all associated data."""
+        # Check if dream exists and belongs to user
+        dream = await self._repo.get_dream(user_id, did, db)
+        if not dream:
+            return False
+        
+        # Collect S3 keys before deletion
+        s3_keys_to_delete = [
+            seg.s3_key for seg in dream.segments 
+            if seg.modality == "audio" and seg.s3_key
+        ]
+        
+        # Delete from database (cascades to segments)
+        success = await self._repo.delete_dream(user_id, did, db)
+        
+        if success and s3_keys_to_delete:
+            # Create background task for S3 cleanup
+            asyncio.create_task(self._cleanup_s3_objects(s3_keys_to_delete))
+            
+        return success
+    
+    async def _cleanup_s3_objects(self, s3_keys: List[str]) -> None:
+        """Background task to delete S3 objects."""
+        logger.info(f"Starting S3 cleanup for {len(s3_keys)} objects")
+        for key in s3_keys:
+            try:
+                await self._storage.delete_object(key)
+            except Exception as e:
+                logger.error(f"Failed to delete S3 object {key}: {e}")
 
     # ---------------------------------------------------------------------- #
     # Background helpers

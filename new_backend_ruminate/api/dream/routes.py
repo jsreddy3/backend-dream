@@ -96,6 +96,17 @@ async def update_dream(
         raise HTTPException(404, "Dream not found")
     return DreamRead.model_validate(dream).model_dump()
 
+@router.delete("/{did}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_dream(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    ok = await svc.delete_dream(user_id, did, db)
+    if not ok:
+        raise HTTPException(404, "Dream not found")
+
 @router.get("/{did}/transcript", response_model=TranscriptRead)
 async def get_transcript(
     did: UUID,

@@ -71,12 +71,22 @@ class GPT4oTranscriptionService(TranscriptionService):
 
             # Calculate cost and extract metrics
             if hasattr(response, 'usage') and response.usage:
-                cost = self._calculate_cost(response.usage)
-                audio_tokens = response.usage.input_token_details.audio_tokens
-                text_tokens = response.usage.output_tokens
+                try:
+                    cost = self._calculate_cost(response.usage)
+                except AttributeError as e:
+                    print(f"Error calculating cost: {e}")
+                    cost = 0.0
+                
+                # Extract tokens based on format
+                if isinstance(response.usage, dict):
+                    if 'input_token_details' in response.usage and isinstance(response.usage['input_token_details'], dict):
+                        audio_tokens = response.usage['input_token_details'].get('audio_tokens', 0)
+                    else:
+                        audio_tokens = response.usage.get('prompt_tokens', 0)
+                    text_tokens = response.usage.get('completion_tokens', response.usage.get('output_tokens', 0))
                 
                 # Estimate audio duration (approximately 100 tokens per second)
-                estimated_duration_seconds = audio_tokens / 100
+                estimated_duration_seconds = audio_tokens / 100 if audio_tokens > 0 else 0
                 
                 print(f"\n--- Transcription Metrics ---")
                 print(f"Audio duration: ~{estimated_duration_seconds:.1f} seconds")
