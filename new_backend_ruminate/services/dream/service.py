@@ -468,8 +468,12 @@ Return a JSON array with this structure:
         force_regenerate: bool = False
     ) -> Optional[Dream]:
         """Generate comprehensive dream analysis using all available information."""
+        logger.info(f"=== GENERATE_ANALYSIS START for dream {did} ===")
+        print(f"DEBUG: generate_analysis called for dream {did}, force_regenerate={force_regenerate}")
+        
         if not self._analysis_llm:
             logger.warning("Analysis LLM service not available, cannot generate analysis")
+            print("DEBUG: No analysis LLM available")
             return None
         
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
@@ -497,27 +501,30 @@ Return a JSON array with this structure:
         title = None
         summary = None
         additional_info = None
-        questions = []
-        answers = []
         
         async with session_scope() as session:
             dream = await self._repo.get_dream(user_id, did, session)
             if not dream:
                 logger.error(f"Dream {did} not found for user {user_id}")
+                print(f"DEBUG: Dream {did} not found")
                 await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
                 return None
+            print(f"DEBUG: Dream found: {dream.title}")
             
             # Check if analysis already exists and not forcing regeneration
             if dream.analysis and not force_regenerate:
                 logger.info(f"Analysis already exists for dream {did}, returning existing analysis")
+                print(f"DEBUG: Analysis already exists, returning existing")
                 await self._repo.update_analysis_status(user_id, did, GenerationStatus.COMPLETED, session)
                 return dream
             
             # Validate prerequisites
             if not dream.transcript:
                 logger.error(f"No transcript available for dream {did}, cannot generate analysis")
+                print(f"DEBUG: No transcript available")
                 await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
                 return None
+            print(f"DEBUG: Transcript found: {dream.transcript[:100]}...")
             
             # Extract all needed data while session is open
             transcript = dream.transcript
@@ -525,14 +532,8 @@ Return a JSON array with this structure:
             summary = dream.summary
             additional_info = dream.additional_info
             
-            # Get questions and answers
-            questions = await self._repo.get_interpretation_questions(user_id, did, session)
-            answers = await self._repo.get_interpretation_answers(user_id, did, session)
-        
         logger.info(f"Generating analysis for dream {did}")
-        
-        # Create a mapping of question_id to answer for easy lookup
-        answer_map = {answer.question_id: answer for answer in answers}
+        print(f"DEBUG: Starting LLM analysis generation")
         
         # Build the comprehensive context
         context_parts = []
@@ -544,27 +545,7 @@ Return a JSON array with this structure:
         if summary:
             context_parts.append(f"\nSummary:\n{summary}")
         
-        # 2. Interpretation questions and answers
-        if questions:
-            context_parts.append("\nInterpretation Questions and Responses:")
-            for question in questions:
-                context_parts.append(f"\nQ: {question.question_text}")
-                
-                if question.id in answer_map:
-                    answer = answer_map[question.id]
-                    if answer.custom_answer:
-                        context_parts.append(f"A: {answer.custom_answer}")
-                    elif answer.selected_choice_id:
-                        # Find the selected choice
-                        selected_choice = next(
-                            (c for c in question.choices if c.id == answer.selected_choice_id),
-                            None
-                        )
-                        if selected_choice:
-                            context_parts.append(f"A: {selected_choice.choice_text}")
-                else:
-                    context_parts.append("A: (No response provided)")
-        
+
         # 3. Additional information
         if additional_info:
             context_parts.append(f"\nAdditional Context:\n{additional_info}")
@@ -581,15 +562,14 @@ Create a thoughtful interpretation."""}
         
         try:
             # Generate analysis using the analysis LLM
+            print(f"DEBUG: Calling LLM with {len(messages)} messages")
             analysis_text = await self._analysis_llm.generate_response(messages)
+            print(f"DEBUG: LLM returned analysis: {analysis_text[:100]}...")
             
             # Prepare metadata
             metadata = {
                 "model": getattr(self._analysis_llm, '_model', 'unknown'),
                 "generated_at": datetime.utcnow().isoformat(),
-                "has_answers": len(answers) > 0,
-                "num_questions": len(questions),
-                "num_answers": len(answers)
             }
             
             # Save analysis to database
@@ -605,6 +585,7 @@ Create a thoughtful interpretation."""}
                 await self._repo.update_analysis_status(user_id, did, GenerationStatus.COMPLETED, session)
                 
                 logger.info(f"Generated and saved analysis for dream {did}")
+                print(f"DEBUG: Analysis saved successfully")
                 return updated_dream
             
         except Exception as e:

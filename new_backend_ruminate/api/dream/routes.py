@@ -70,7 +70,10 @@ async def read_dream(
     dream = await svc.get_dream(user_id, did, db)
     if not dream:
         raise HTTPException(404, "Dream not found")
-    return DreamRead.model_validate(dream).model_dump()
+    result = DreamRead.model_validate(dream).model_dump()
+    analysis = result.get('analysis')
+    print(f"DEBUG: GET dream returning - has analysis: {analysis is not None}, analysis length: {len(analysis) if analysis else 0}")
+    return result
 
 @router.patch("/{did}")
 async def update_dream(
