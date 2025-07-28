@@ -552,12 +552,12 @@ Return a JSON array with this structure:
         
         # Prepare the analysis prompt
         messages = [
-            {"role": "system", "content": """You are an expert dream analyst who helps people understand the deeper meanings and insights within their dreams."""},
-            {"role": "user", "content": f"""Please provide a comprehensive analysis of this dream based on all the information provided:
+            {"role": "system", "content": """You are an expert dream analyst who provides concise, insightful interpretations. Keep your analysis focused and under 200 words."""},
+            {"role": "user", "content": f"""Please provide a brief but insightful analysis of this dream:
 
 {chr(10).join(context_parts)}
 
-Create a thoughtful interpretation."""}
+Provide a focused interpretation in 200 words or less. Focus on the most significant symbols and meanings."""}
         ]
         
         try:
