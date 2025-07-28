@@ -77,6 +77,10 @@ class GPT4oTranscriptionService(TranscriptionService):
                     print(f"Error calculating cost: {e}")
                     cost = 0.0
                 
+                # Initialize default values
+                audio_tokens = 0
+                text_tokens = 0
+                
                 # Extract tokens based on format
                 if isinstance(response.usage, dict):
                     if 'input_token_details' in response.usage and isinstance(response.usage['input_token_details'], dict):
