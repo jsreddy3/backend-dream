@@ -53,8 +53,13 @@ async def get_user_profile(
     # Get dream summary for statistics
     summary = await svc.get_dream_summary(user_id, db)
     
+    # Check if archetype needs migration (for display purposes)
+    display_archetype = profile.archetype
+    if profile.archetype in svc.ARCHETYPE_MIGRATION:
+        display_archetype = svc.ARCHETYPE_MIGRATION[profile.archetype]
+    
     return ProfileRead(
-        archetype=profile.archetype,
+        archetype=display_archetype,
         archetype_confidence=profile.archetype_confidence,
         statistics={
             "total_dreams": summary.dream_count if summary else 0,
@@ -188,12 +193,42 @@ async def suggest_archetype(
     
     archetype, confidence = await svc.suggest_initial_archetype(preferences)
     
+    archetype_info = ARCHETYPES.get(archetype, {})
+    
     return {
         "suggested_archetype": archetype,
         "confidence": confidence,
         "archetype_details": {
-            "name": archetype.replace("_", " ").title(),
-            "symbol": ARCHETYPES.get(archetype, {}).get("symbol", "🌟"),
-            "description": f"Based on your preferences, you appear to be a {archetype.replace('_', ' ').title()}"
+            "name": archetype_info.get("name", archetype.title()),
+            "symbol": archetype_info.get("symbol", "🧠"),
+            "description": archetype_info.get("description", ""),
+            "researcher": archetype_info.get("researcher", ""),
+            "theory": archetype_info.get("theory", "")
         }
+    }
+
+@router.post("/me/profile/initial-archetype", name="save_initial_archetype")
+async def save_initial_archetype(
+    request: dict,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: ProfileService = Depends(get_profile_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Save the initial archetype after onboarding."""
+    archetype = request.get("archetype")
+    confidence = request.get("confidence", 0.85)
+    
+    if not archetype:
+        raise HTTPException(
+            status_code=400,
+            detail="Archetype is required"
+        )
+    
+    # Save the initial archetype to the user's profile
+    profile = await svc.save_initial_archetype(user_id, archetype, confidence, db)
+    
+    return {
+        "message": "Initial archetype saved successfully",
+        "archetype": profile.archetype,
+        "confidence": profile.archetype_confidence
     }

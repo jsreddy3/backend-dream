@@ -672,7 +672,7 @@ Provide a focused interpretation in 100 words or less. Focus on the most signifi
         
         # Prepare the expanded analysis prompt
         messages = [
-            {"role": "system", "content": """You are an expert dream analyst. You've already provided an initial interpretation. Now expand on it with deeper insights, exploring more symbolic meanings, psychological connections, and personal relevance."""},
+            {"role": "system", "content": """You are an expert dream analyst. You've already provided an initial interpretation. Now expand on it with deeper insights, exploring more symbolic meanings, psychological connections, and personal relevance. Format your response with clear sections."""},
             {"role": "user", "content": f"""Here is the dream and your initial analysis:
 
 DREAM CONTEXT:
@@ -681,13 +681,18 @@ DREAM CONTEXT:
 YOUR INITIAL ANALYSIS:
 {existing_analysis}
 
-Please expand on this analysis with deeper insights. Explore:
-- More detailed symbolic meanings
-- Psychological connections and patterns
-- Emotional significance and personal relevance
-- Additional layers of interpretation
+Provide an expanded analysis (150-200 words total) with these sections:
 
-Build on your initial analysis rather than repeating it. Aim for 300-400 words total, providing rich, nuanced insights."""}
+## Symbolic Meanings
+Key symbols and their deeper significance
+
+## Psychological Patterns
+Connections to emotional states or life themes
+
+## Personal Relevance
+How this might relate to current life experiences
+
+Keep each section concise (2-3 sentences). Focus on new insights not covered in the initial analysis."""}
         ]
         
         try:

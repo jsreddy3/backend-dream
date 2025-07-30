@@ -18,43 +18,74 @@ from new_backend_ruminate.domain.ports.llm import LLMService
 
 logger = logging.getLogger(__name__)
 
-# Archetype definitions
+# Archetype definitions with academic backing
 ARCHETYPES = {
-    "starweaver": {
-        "keywords": ["symbol", "pattern", "weave", "cosmic", "ancient", "wisdom"],
-        "symbol": "🌟",
-        "colors": ["5B2C6F", "FFD700"]
+    "analytical": {
+        "keywords": ["organize", "process", "structure", "practical", "clear", "daily", "routine"],
+        "symbol": "🧠",
+        "name": "Analytical Dreamer",
+        "researcher": "Dr. Ernest Hartmann",
+        "theory": "Thick-Boundary Dreaming Theory",
+        "description": "Your dreams quietly process and organize your daily experiences, reflecting your practical approach to life."
     },
-    "moonwalker": {
-        "keywords": ["fly", "travel", "journey", "path", "adventure", "explore"],
-        "symbol": "🌙",
-        "colors": ["C0C0C0", "191970"]
+    "reflective": {
+        "keywords": ["emotion", "relationship", "family", "feeling", "water", "heart", "process"],
+        "symbol": "🌊",
+        "name": "Reflective Dreamer",
+        "researcher": "Dr. Rosalind Cartwright",
+        "theory": "Dreams as Emotional Adaptation",
+        "description": "Your dreams help you process emotional experiences, manage relationships, and build psychological resilience."
     },
-    "soulkeeper": {
-        "keywords": ["feel", "emotion", "heart", "soul", "deep", "love"],
-        "symbol": "💫",
-        "colors": ["008B8B", "FFB6C1"]
+    "introspective": {
+        "keywords": ["symbol", "insight", "vivid", "meaning", "mystery", "deep", "spiritual"],
+        "symbol": "🔍",
+        "name": "Introspective Dreamer",
+        "researcher": "Dr. Michael Schredl",
+        "theory": "Dream Recall and Personality Research",
+        "description": "You regularly experience vivid, symbolic dreams, revealing deep insights into your inner life."
     },
-    "timeseeker": {
-        "keywords": ["past", "memory", "future", "time", "remember", "tomorrow"],
-        "symbol": "⏳",
-        "colors": ["FFBF00", "CD7F32"]
+    "lucid": {
+        "keywords": ["control", "aware", "fly", "conscious", "lucid", "direct", "intention"],
+        "symbol": "🌀",
+        "name": "Lucid Dreamer",
+        "researcher": "Dr. Stephen LaBerge",
+        "theory": "Lucid Dreaming and Metacognition",
+        "description": "Your vivid, sometimes controllable dreams indicate exceptional self-awareness, imagination, and curiosity."
     },
-    "shadowmender": {
-        "keywords": ["dark", "fear", "shadow", "night", "hidden", "transform"],
-        "symbol": "🌑",
-        "colors": ["4B0082", "36454F"]
+    "creative": {
+        "keywords": ["imagine", "create", "art", "fantasy", "nature", "adventure", "inspire"],
+        "symbol": "🎨",
+        "name": "Creative Dreamer",
+        "researcher": "Dr. Ernest Hartmann",
+        "theory": "Thin-Boundary Dreaming Theory",
+        "description": "Your dreams overflow with imaginative and symbolic content, providing a wellspring for creative thought."
     },
-    "lightbringer": {
-        "keywords": ["light", "joy", "happy", "bright", "sun", "hope"],
-        "symbol": "☀️",
-        "colors": ["A8C3BC", "FFCCCB"]
+    "resolving": {
+        "keywords": ["solve", "problem", "chase", "work", "recurring", "unresolved", "challenge"],
+        "symbol": "⚙️",
+        "name": "Resolving Dreamer",
+        "researcher": "Dr. G. William Domhoff",
+        "theory": "Dreams as Problem-solving Mechanisms",
+        "description": "Your dreams frequently revisit unresolved issues, helping you rehearse possibilities and solve problems."
     }
+}
+
+# Migration mapping from old to new archetypes
+ARCHETYPE_MIGRATION = {
+    "starweaver": "introspective",
+    "moonwalker": "lucid",
+    "soulkeeper": "reflective",
+    "timeseeker": "resolving",
+    "shadowmender": "resolving",
+    "lightbringer": "creative"
 }
 
 
 class ProfileService:
     """Service for managing user profiles and dream summaries."""
+    
+    # Expose migration mapping for API use
+    ARCHETYPE_MIGRATION = ARCHETYPE_MIGRATION
     
     def __init__(
         self,
@@ -136,17 +167,33 @@ class ProfileService:
         
         # Get dream summary
         summary = await self._repo.get_dream_summary(user_id, session)
+        
+        # If user has no dreams but has an archetype from onboarding, keep it
+        if (not summary or summary.dream_count == 0) and profile.archetype:
+            logger.info(f"User {user_id} has initial archetype '{profile.archetype}' from onboarding, keeping it")
+            return profile
+        
         if not summary or summary.dream_count == 0:
             logger.warning(f"No dreams found for user {user_id}")
             return profile
         
-        # Calculate archetype
+        # Calculate archetype based on dreams
         archetype, confidence = self._calculate_archetype(summary.theme_keywords)
         if archetype:
+            # If this is the first real calculation (replacing onboarding archetype)
+            # we might want to blend the confidence or notify the user
+            metadata = {
+                "keywords_analyzed": len(summary.theme_keywords),
+                "dream_count": summary.dream_count
+            }
+            if profile.archetype and profile.archetype_metadata.get("source") == "onboarding":
+                metadata["previous_source"] = "onboarding"
+                metadata["previous_archetype"] = profile.archetype
+            
             profile.update_archetype(
                 archetype=archetype,
                 confidence=confidence,
-                metadata={"keywords_analyzed": len(summary.theme_keywords)}
+                metadata=metadata
             )
         
         # Calculate emotional landscape
@@ -166,6 +213,34 @@ class ProfileService:
         
         # Save updated profile
         return await self._repo.update_user_profile(profile, session)
+    
+    async def save_initial_archetype(
+        self,
+        user_id: UUID,
+        archetype: str,
+        confidence: float,
+        session: AsyncSession
+    ) -> UserProfile:
+        """Save the initial archetype from onboarding."""
+        # Get or create profile
+        profile = await self._repo.get_or_create_user_profile(user_id, session)
+        
+        # Only update if no archetype exists (preserve existing archetypes)
+        if not profile.archetype:
+            profile.update_archetype(
+                archetype=archetype,
+                confidence=confidence,
+                metadata={"source": "onboarding"}
+            )
+            profile.mark_calculated()
+            
+            # Save the profile
+            profile = await self._repo.update_user_profile(profile, session)
+            logger.info(f"Saved initial archetype '{archetype}' for user {user_id}")
+        else:
+            logger.info(f"User {user_id} already has archetype '{profile.archetype}', skipping update")
+        
+        return profile
     
     # ─────────────────── Private Helper Methods ─────────────────────
     
@@ -395,63 +470,121 @@ class ProfileService:
         # Score each archetype based on preferences
         scores = {}
         
-        # Primary goal mapping
+        # Primary goal mapping (3 points)
         goal_archetypes = {
-            "self_discovery": ["starweaver", "timeseeker"],
-            "creativity": ["starweaver", "moonwalker"],
-            "problem_solving": ["timeseeker", "moonwalker"],
-            "emotional_healing": ["soulkeeper", "shadowmender"],
-            "lucid_dreaming": ["moonwalker", "lightbringer"]
+            "self_discovery": ["introspective", "analytical"],  # Split between practical and deep
+            "creativity": ["creative", "introspective"],
+            "problem_solving": ["resolving", "analytical"],
+            "emotional_healing": ["reflective", "resolving"],
+            "lucid_dreaming": ["lucid", "creative"]
         }
         
         # Initialize scores
         for archetype in ARCHETYPES:
             scores[archetype] = 0
         
-        # Score based on primary goal
+        # Score based on primary goal (3 points)
         if preferences.primary_goal and preferences.primary_goal in goal_archetypes:
             for archetype in goal_archetypes[preferences.primary_goal]:
                 scores[archetype] += 3
         
-        # Score based on dream themes
+        # Score based on dream recall frequency (2 points)
+        recall_mappings = {
+            "never": ["analytical"],
+            "rarely": ["analytical", "resolving"],
+            "sometimes": ["reflective", "resolving"],
+            "often": ["introspective", "creative", "lucid"],
+            "always": ["introspective", "lucid"]
+        }
+        
+        if preferences.dream_recall_frequency and preferences.dream_recall_frequency in recall_mappings:
+            for archetype in recall_mappings[preferences.dream_recall_frequency]:
+                scores[archetype] += 2
+        
+        # Score based on dream vividness (2 points)
+        vividness_mappings = {
+            "vague": ["analytical"],
+            "moderate": ["reflective", "resolving", "analytical"],
+            "vivid": ["introspective", "creative", "reflective"],
+            "very_vivid": ["lucid", "creative", "introspective"]
+        }
+        
+        if preferences.dream_vividness and preferences.dream_vividness in vividness_mappings:
+            for archetype in vividness_mappings[preferences.dream_vividness]:
+                scores[archetype] += 2
+        
+        # Score based on dream themes (1 point each, max 3 counted)
         if preferences.common_dream_themes:
             theme_mappings = {
-                "flying": ["moonwalker", "lightbringer"],
-                "water": ["soulkeeper", "timeseeker"],
-                "darkness": ["shadowmender"],
-                "light": ["lightbringer", "starweaver"],
-                "family": ["soulkeeper"],
-                "mystery": ["timeseeker", "shadowmender"],
-                "adventure": ["moonwalker"],
-                "emotions": ["soulkeeper", "shadowmender"]
+                "flying": ["lucid", "creative"],
+                "falling": ["resolving"],
+                "being_chased": ["resolving"],
+                "water": ["reflective", "introspective"],
+                "animals": ["creative", "reflective"],
+                "family": ["reflective"],
+                "work": ["analytical", "resolving"],
+                "school": ["analytical", "resolving"],
+                "death": ["introspective", "resolving"],
+                "food": ["analytical"],
+                "vehicles": ["analytical"],
+                "buildings": ["analytical"],
+                "nature": ["creative", "introspective"],
+                "supernatural": ["introspective", "creative"],
+                "adventure": ["creative", "lucid"],
+                "romance": ["reflective"]
             }
             
-            for theme in preferences.common_dream_themes:
+            theme_count = 0
+            for theme in preferences.common_dream_themes[:3]:  # Max 3 themes
                 theme_lower = theme.lower()
-                for mapped_theme, archetypes in theme_mappings.items():
-                    if mapped_theme in theme_lower:
-                        for archetype in archetypes:
-                            scores[archetype] += 1
+                if theme_lower in theme_mappings:
+                    for archetype in theme_mappings[theme_lower]:
+                        scores[archetype] += 1
+                    theme_count += 1
         
-        # Score based on dream recall and vividness
-        if preferences.dream_recall_frequency in ["often", "always"]:
-            scores["starweaver"] += 1
-        elif preferences.dream_recall_frequency in ["never", "rarely"]:
-            scores["shadowmender"] += 1
-        
-        if preferences.dream_vividness in ["vivid", "very_vivid"]:
-            scores["lightbringer"] += 1
-            scores["moonwalker"] += 1
+        # Score based on interests (1 point each, max 2 counted)
+        if preferences.interests:
+            interest_mappings = {
+                "lucid_dreaming": ["lucid"],
+                "symbolism": ["introspective", "creative"],
+                "emotional_processing": ["reflective"],
+                "creativity": ["creative"],
+                "problem_solving": ["resolving", "analytical"],
+                "spiritual_growth": ["introspective"],
+                "memory_enhancement": ["analytical"],
+                "nightmare_resolution": ["resolving"],
+                "prophetic_dreams": ["introspective"]
+            }
+            
+            interest_count = 0
+            for interest in preferences.interests[:2]:  # Max 2 interests
+                if interest in interest_mappings:
+                    for archetype in interest_mappings[interest]:
+                        scores[archetype] += 1
+                    interest_count += 1
         
         # Find best match
         if not any(scores.values()):
-            return "starweaver", 0.85  # Default with good confidence
+            return "analytical", 0.80  # Default with base confidence
         
-        best_archetype = max(scores, key=scores.get)
+        # If tied, use priority order
+        max_score = max(scores.values())
+        tied_archetypes = [arch for arch, score in scores.items() if score == max_score]
+        
+        if len(tied_archetypes) > 1:
+            # Priority order: introspective > creative > reflective > lucid > resolving > analytical
+            priority = ["introspective", "creative", "reflective", "lucid", "resolving", "analytical"]
+            for arch in priority:
+                if arch in tied_archetypes:
+                    best_archetype = arch
+                    break
+        else:
+            best_archetype = max(scores, key=scores.get)
+        
         best_score = scores[best_archetype]
         
         # Calculate confidence (normalize to 0.80-0.95 range)
-        max_possible_score = 10  # Adjust based on scoring logic
+        max_possible_score = 12  # 3 (goal) + 2 (recall) + 2 (vividness) + 3 (themes) + 2 (interests)
         raw_confidence = min(best_score / max_possible_score, 1.0)
         # Map raw score (0-1) to confidence range (0.80-0.95)
         confidence = 0.80 + (raw_confidence * 0.15)
