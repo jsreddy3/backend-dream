@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from new_backend_ruminate.domain.user.profile_repo import ProfileRepository
 from new_backend_ruminate.domain.user.profile import DreamSummary, UserProfile, EmotionalMetric, DreamTheme
+from new_backend_ruminate.domain.user.preferences import UserPreferences
 from new_backend_ruminate.domain.dream.entities.dream import Dream
 from new_backend_ruminate.domain.dream.entities.segments import Segment
 from new_backend_ruminate.domain.ports.llm import LLMService
@@ -125,7 +126,8 @@ class ProfileService:
         # Check if recalculation is needed
         if not force and profile.last_calculated_at:
             # Only recalculate if it's been more than 24 hours
-            hours_since = (datetime.utcnow() - profile.last_calculated_at).total_seconds() / 3600
+            from datetime import timezone
+            hours_since = (datetime.now(timezone.utc) - profile.last_calculated_at).total_seconds() / 3600
             if hours_since < 24:
                 logger.info(f"Profile for user {user_id} is fresh (calculated {hours_since:.1f} hours ago)")
                 return profile
@@ -331,3 +333,123 @@ class ProfileService:
         # Return random symbols if no archetype
         import random
         return random.sample(base_symbols, 5)
+    
+    # ─────────────────── User Preferences Methods ─────────────────────
+    
+    async def get_user_preferences(self, user_id: UUID, session: AsyncSession) -> Optional[UserPreferences]:
+        """Get user preferences."""
+        return await self._repo.get_user_preferences(user_id, session)
+    
+    async def create_user_preferences(
+        self,
+        user_id: UUID,
+        preferences_data: dict,
+        session: AsyncSession
+    ) -> UserPreferences:
+        """Create user preferences from data dict."""
+        from uuid import uuid4
+        
+        # Create preferences object with explicit defaults
+        preferences = UserPreferences(
+            id=uuid4(),
+            user_id=user_id,
+            common_dream_themes=preferences_data.get('common_dream_themes', []),
+            interests=preferences_data.get('interests', []),
+            reminder_enabled=preferences_data.get('reminder_enabled', True),
+            reminder_frequency=preferences_data.get('reminder_frequency', 'daily'),
+            reminder_days=preferences_data.get('reminder_days', []),
+            personality_traits=preferences_data.get('personality_traits', {}),
+            onboarding_completed=preferences_data.get('onboarding_completed', False),
+            **{k: v for k, v in preferences_data.items() if k not in ['common_dream_themes', 'interests', 'reminder_enabled', 'reminder_frequency', 'reminder_days', 'personality_traits', 'onboarding_completed']}
+        )
+        return await self._repo.create_user_preferences(preferences, session)
+    
+    async def update_user_preferences(
+        self,
+        user_id: UUID,
+        preferences_data: dict,
+        session: AsyncSession
+    ) -> Optional[UserPreferences]:
+        """Update user preferences with partial data."""
+        # Get existing preferences
+        preferences = await self._repo.get_user_preferences(user_id, session)
+        if not preferences:
+            # Create new if doesn't exist
+            return await self.create_user_preferences(user_id, preferences_data, session)
+        
+        # Update only provided fields
+        for key, value in preferences_data.items():
+            if hasattr(preferences, key) and value is not None:
+                setattr(preferences, key, value)
+        
+        # Update timestamp
+        from datetime import timezone
+        preferences.updated_at = datetime.now(timezone.utc)
+        
+        return await self._repo.update_user_preferences(preferences, session)
+    
+    async def suggest_initial_archetype(self, preferences: UserPreferences) -> tuple[str, float]:
+        """Suggest archetype based on onboarding preferences."""
+        # Score each archetype based on preferences
+        scores = {}
+        
+        # Primary goal mapping
+        goal_archetypes = {
+            "self_discovery": ["starweaver", "timeseeker"],
+            "creativity": ["starweaver", "moonwalker"],
+            "problem_solving": ["timeseeker", "moonwalker"],
+            "emotional_healing": ["soulkeeper", "shadowmender"],
+            "lucid_dreaming": ["moonwalker", "lightbringer"]
+        }
+        
+        # Initialize scores
+        for archetype in ARCHETYPES:
+            scores[archetype] = 0
+        
+        # Score based on primary goal
+        if preferences.primary_goal and preferences.primary_goal in goal_archetypes:
+            for archetype in goal_archetypes[preferences.primary_goal]:
+                scores[archetype] += 3
+        
+        # Score based on dream themes
+        if preferences.common_dream_themes:
+            theme_mappings = {
+                "flying": ["moonwalker", "lightbringer"],
+                "water": ["soulkeeper", "timeseeker"],
+                "darkness": ["shadowmender"],
+                "light": ["lightbringer", "starweaver"],
+                "family": ["soulkeeper"],
+                "mystery": ["timeseeker", "shadowmender"],
+                "adventure": ["moonwalker"],
+                "emotions": ["soulkeeper", "shadowmender"]
+            }
+            
+            for theme in preferences.common_dream_themes:
+                theme_lower = theme.lower()
+                for mapped_theme, archetypes in theme_mappings.items():
+                    if mapped_theme in theme_lower:
+                        for archetype in archetypes:
+                            scores[archetype] += 1
+        
+        # Score based on dream recall and vividness
+        if preferences.dream_recall_frequency in ["often", "always"]:
+            scores["starweaver"] += 1
+        elif preferences.dream_recall_frequency in ["never", "rarely"]:
+            scores["shadowmender"] += 1
+        
+        if preferences.dream_vividness in ["vivid", "very_vivid"]:
+            scores["lightbringer"] += 1
+            scores["moonwalker"] += 1
+        
+        # Find best match
+        if not any(scores.values()):
+            return "starweaver", 0.5  # Default
+        
+        best_archetype = max(scores, key=scores.get)
+        best_score = scores[best_archetype]
+        
+        # Calculate confidence (normalize to 0-1)
+        max_possible_score = 10  # Adjust based on scoring logic
+        confidence = min(best_score / max_possible_score, 1.0)
+        
+        return best_archetype, confidence

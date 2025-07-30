@@ -4,6 +4,7 @@ from __future__ import annotations
 from uuid import uuid4
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy import Column, String, DateTime, func
+from sqlalchemy.orm import relationship
 
 from new_backend_ruminate.infrastructure.db.meta import Base
 

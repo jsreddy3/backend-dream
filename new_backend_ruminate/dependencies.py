@@ -19,9 +19,11 @@ from new_backend_ruminate.infrastructure.implementations.conversation.rds_conver
 from new_backend_ruminate.infrastructure.implementations.dream.rds_dream_repository import RDSDreamRepository
 from new_backend_ruminate.infrastructure.implementations.object_storage.s3_storage_repository import S3StorageRepository
 from new_backend_ruminate.infrastructure.implementations.user.rds_user_repository import RDSUserRepository
+from new_backend_ruminate.infrastructure.implementations.user.profile_repository import SqlProfileRepository
 from new_backend_ruminate.infrastructure.llm.openai_llm import OpenAILLM
 from new_backend_ruminate.services.dream.service import DreamService
 from new_backend_ruminate.services.conversation.service import ConversationService
+from new_backend_ruminate.services.profile.service import ProfileService
 from new_backend_ruminate.infrastructure.transcription.deepgram import DeepgramTranscriptionService
 from new_backend_ruminate.infrastructure.transcription.whisper import WhisperTranscriptionService
 from new_backend_ruminate.infrastructure.transcription.gpt4o import GPT4oTranscriptionService
@@ -45,6 +47,7 @@ _hub = EventStreamHub()
 _conversation_repo = RDSConversationRepository()
 _dream_repo = RDSDreamRepository()
 _user_repo = RDSUserRepository()
+_profile_repo = SqlProfileRepository()
 _llm  = OpenAILLM(
     api_key=settings().openai_api_key,
     model=settings().openai_model,
@@ -68,6 +71,7 @@ _agent_service = AgentService(_conversation_repo, _llm, _hub, _ctx_builder)
 _storage_service = S3StorageRepository()
 _transcribe = GPT4oTranscriptionService()
 _dream_service = DreamService(_dream_repo, _storage_service, _user_repo, _transcribe, _hub, _dream_summary_llm, _dream_question_llm, _dream_analysis_llm)
+_profile_service = ProfileService(_profile_repo, _dream_analysis_llm)
 _video_queue = CeleryVideoQueueAdapter()
 
 # ─────────────────────── DI provider helpers ───────────────────── #
@@ -121,6 +125,10 @@ def get_dream_analysis_llm() -> OpenAILLM:
 def get_video_queue() -> VideoQueuePort:
     """Return the singleton video queue adapter."""
     return _video_queue
+
+def get_profile_service() -> ProfileService:
+    """Return the singleton ProfileService."""
+    return _profile_service
 
 # ───────────────────────── auth helpers ───────────────────────── #
 _security = HTTPBearer()

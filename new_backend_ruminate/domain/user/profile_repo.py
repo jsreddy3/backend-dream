@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .profile import DreamSummary, UserProfile
+from .preferences import UserPreferences
 
 
 class ProfileRepository(ABC):
@@ -53,4 +54,25 @@ class ProfileRepository(ABC):
     @abstractmethod
     async def get_or_create_user_profile(self, user_id: UUID, session: AsyncSession) -> UserProfile:
         """Get existing user profile or create a new one."""
+        ...
+    
+    # User Preferences methods
+    @abstractmethod
+    async def get_user_preferences(self, user_id: UUID, session: AsyncSession) -> Optional[UserPreferences]:
+        """Get user preferences."""
+        ...
+    
+    @abstractmethod
+    async def create_user_preferences(self, preferences: UserPreferences, session: AsyncSession) -> UserPreferences:
+        """Create new user preferences."""
+        ...
+    
+    @abstractmethod
+    async def update_user_preferences(self, preferences: UserPreferences, session: AsyncSession) -> UserPreferences:
+        """Update existing user preferences."""
+        ...
+    
+    @abstractmethod
+    async def get_or_create_user_preferences(self, user_id: UUID, session: AsyncSession) -> UserPreferences:
+        """Get existing user preferences or create new ones."""
         ...

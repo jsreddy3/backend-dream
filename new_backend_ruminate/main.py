@@ -7,6 +7,7 @@ from new_backend_ruminate.dependencies import get_event_hub  # optional: expose 
 from new_backend_ruminate.api.conversation.routes import router as conversation_router
 from new_backend_ruminate.api.dream.routes import router as dream_router
 from new_backend_ruminate.api.auth.google import router as google_auth_router
+from new_backend_ruminate.api.profile.routes import router as profile_router
 
 import logging
 from fastapi.responses import JSONResponse
@@ -29,6 +30,7 @@ async def _error_logging_middleware(request: Request, call_next):
 app.include_router(conversation_router)          # wires /conversations/…
 app.include_router(dream_router)                 # wires /dreams/…
 app.include_router(google_auth_router)           # wires /auth/google/…
+app.include_router(profile_router, prefix="/api") # wires /api/users/…
 
 @app.on_event("startup")
 async def _startup() -> None:

@@ -447,6 +447,7 @@ async def generate_expanded_analysis(
     svc: DreamService = Depends(get_dream_service),
 ):
     """Generate expanded dream analysis building on existing analysis."""
+    print(f"🚨 EXPANDED ANALYSIS ENDPOINT HIT - Dream ID: {did}")
     logger.info(f"Generate expanded analysis endpoint called for dream {did}")
     
     dream = await svc.generate_expanded_analysis(user_id, did)

@@ -56,6 +56,9 @@ class DreamRead(DreamBase):
     analysis_status: Optional[str]
     analysis_generated_at: Optional[datetime]
     analysis_metadata: Optional[dict]
+    expanded_analysis: Optional[str]
+    expanded_analysis_generated_at: Optional[datetime]
+    expanded_analysis_metadata: Optional[dict]
     state: str
     segments: List[SegmentRead] = []
     video_url: Optional[str] = None

@@ -4,13 +4,14 @@ from __future__ import annotations
 import json
 from typing import Optional
 from uuid import UUID, uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select, update, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from new_backend_ruminate.domain.user.profile_repo import ProfileRepository
 from new_backend_ruminate.domain.user.profile import DreamSummary, UserProfile, EmotionalMetric, DreamTheme
+from new_backend_ruminate.domain.user.preferences import UserPreferences
 
 
 class SqlProfileRepository(ProfileRepository):
@@ -250,3 +251,108 @@ class SqlProfileRepository(ProfileRepository):
             updated_at=datetime.utcnow(),
         )
         return await self.create_user_profile(new_profile, session)
+    
+    # User Preferences methods
+    async def get_user_preferences(self, user_id: UUID, session: AsyncSession) -> Optional[UserPreferences]:
+        """Get user preferences."""
+        result = await session.execute(
+            text("SELECT * FROM user_preferences WHERE user_id = :user_id"),
+            {"user_id": user_id}
+        )
+        row = result.first()
+        
+        if not row:
+            return None
+        
+        return UserPreferences(
+            id=row.id,
+            user_id=row.user_id,
+            typical_bedtime=row.typical_bedtime,
+            typical_wake_time=row.typical_wake_time,
+            sleep_quality=row.sleep_quality,
+            dream_recall_frequency=row.dream_recall_frequency,
+            dream_vividness=row.dream_vividness,
+            common_dream_themes=row.common_dream_themes or [],
+            primary_goal=row.primary_goal,
+            interests=row.interests or [],
+            reminder_enabled=row.reminder_enabled,
+            reminder_time=row.reminder_time,
+            reminder_frequency=row.reminder_frequency,
+            reminder_days=row.reminder_days or [],
+            initial_archetype=row.initial_archetype,
+            personality_traits=row.personality_traits or {},
+            onboarding_completed=row.onboarding_completed,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+    
+    async def create_user_preferences(self, preferences: UserPreferences, session: AsyncSession) -> UserPreferences:
+        """Create new user preferences using ORM."""
+        try:
+            session.add(preferences)
+            await session.commit()
+            await session.refresh(preferences)
+            return preferences
+        except Exception as e:
+            await session.rollback()
+            raise Exception(f"Failed to create user preferences: {str(e)}") from e
+    
+    async def update_user_preferences(self, preferences: UserPreferences, session: AsyncSession) -> UserPreferences:
+        """Update existing user preferences."""
+        await session.execute(
+            text("""
+                UPDATE user_preferences 
+                SET typical_bedtime = :typical_bedtime,
+                    typical_wake_time = :typical_wake_time,
+                    sleep_quality = :sleep_quality,
+                    dream_recall_frequency = :dream_recall_frequency,
+                    dream_vividness = :dream_vividness,
+                    common_dream_themes = :common_dream_themes,
+                    primary_goal = :primary_goal,
+                    interests = :interests,
+                    reminder_enabled = :reminder_enabled,
+                    reminder_time = :reminder_time,
+                    reminder_frequency = :reminder_frequency,
+                    reminder_days = :reminder_days,
+                    initial_archetype = :initial_archetype,
+                    personality_traits = :personality_traits,
+                    onboarding_completed = :onboarding_completed,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id
+            """),
+            {
+                "id": preferences.id,
+                "typical_bedtime": preferences.typical_bedtime,
+                "typical_wake_time": preferences.typical_wake_time,
+                "sleep_quality": preferences.sleep_quality,
+                "dream_recall_frequency": preferences.dream_recall_frequency,
+                "dream_vividness": preferences.dream_vividness,
+                "common_dream_themes": json.dumps(preferences.common_dream_themes),
+                "primary_goal": preferences.primary_goal,
+                "interests": json.dumps(preferences.interests),
+                "reminder_enabled": preferences.reminder_enabled,
+                "reminder_time": preferences.reminder_time,
+                "reminder_frequency": preferences.reminder_frequency,
+                "reminder_days": json.dumps(preferences.reminder_days),
+                "initial_archetype": preferences.initial_archetype,
+                "personality_traits": json.dumps(preferences.personality_traits),
+                "onboarding_completed": preferences.onboarding_completed,
+            }
+        )
+        await session.commit()
+        return preferences
+    
+    async def get_or_create_user_preferences(self, user_id: UUID, session: AsyncSession) -> UserPreferences:
+        """Get existing user preferences or create new ones."""
+        preferences = await self.get_user_preferences(user_id, session)
+        if preferences:
+            return preferences
+        
+        # Create new preferences with defaults
+        new_preferences = UserPreferences(
+            id=uuid4(),
+            user_id=user_id,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        return await self.create_user_preferences(new_preferences, session)

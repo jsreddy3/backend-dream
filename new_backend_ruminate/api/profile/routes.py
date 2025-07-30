@@ -11,8 +11,9 @@ from new_backend_ruminate.dependencies import (
     get_profile_service,
     get_current_user_id,
 )
-from new_backend_ruminate.services.profile.service import ProfileService
+from new_backend_ruminate.services.profile.service import ProfileService, ARCHETYPES
 from .schemas import ProfileRead, ProfileCalculateRequest, ProfileCalculateResponse
+from .preference_schemas import PreferencesCreate, PreferencesUpdate, PreferencesRead
 
 logger = logging.getLogger(__name__)
 
@@ -100,3 +101,99 @@ async def calculate_user_profile(
         status="processing",
         message="Profile calculation has been queued"
     )
+
+# ─────────────────────────────── preferences endpoints ─────────────────────────────── #
+
+@router.get("/me/preferences", response_model=PreferencesRead, name="get_user_preferences")
+async def get_user_preferences(
+    user_id: UUID = Depends(get_current_user_id),
+    svc: ProfileService = Depends(get_profile_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get the current user's preferences."""
+    preferences = await svc.get_user_preferences(user_id, db)
+    
+    if not preferences:
+        # Return default preferences if none exist
+        raise HTTPException(
+            status_code=404,
+            detail="No preferences found. Please complete onboarding first."
+        )
+    
+    return preferences
+
+@router.post("/me/preferences", response_model=PreferencesRead, status_code=201, name="create_user_preferences")
+async def create_user_preferences(
+    preferences: PreferencesCreate,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: ProfileService = Depends(get_profile_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Create user preferences (typically during onboarding)."""
+    # Check if preferences already exist
+    existing = await svc.get_user_preferences(user_id, db)
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Preferences already exist. Use PATCH to update."
+        )
+    
+    # Create preferences
+    preferences_data = preferences.dict(exclude_unset=True)
+    
+    # Create preferences
+    created = await svc.create_user_preferences(user_id, preferences_data, db)
+    
+    return created
+
+@router.patch("/me/preferences", response_model=PreferencesRead, name="update_user_preferences")
+async def update_user_preferences(
+    preferences: PreferencesUpdate,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: ProfileService = Depends(get_profile_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Update user preferences (partial update supported)."""
+    # Get only set fields
+    preferences_data = preferences.dict(exclude_unset=True)
+    
+    if not preferences_data:
+        raise HTTPException(
+            status_code=400,
+            detail="No fields to update"
+        )
+    
+    updated = await svc.update_user_preferences(user_id, preferences_data, db)
+    if not updated:
+        raise HTTPException(
+            status_code=404,
+            detail="Preferences not found"
+        )
+    
+    return updated
+
+@router.post("/me/preferences/suggest-archetype", name="suggest_archetype")
+async def suggest_archetype(
+    user_id: UUID = Depends(get_current_user_id),
+    svc: ProfileService = Depends(get_profile_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Suggest an archetype based on current preferences."""
+    preferences = await svc.get_user_preferences(user_id, db)
+    if not preferences:
+        raise HTTPException(
+            status_code=404,
+            detail="No preferences found"
+        )
+    
+    archetype, confidence = await svc.suggest_initial_archetype(preferences)
+    
+    return {
+        "suggested_archetype": archetype,
+        "confidence": confidence,
+        "archetype_details": {
+            "name": archetype.replace("_", " ").title(),
+            "symbol": ARCHETYPES.get(archetype, {}).get("symbol", "🌟"),
+            "description": f"Based on your preferences, you appear to be a {archetype.replace('_', ' ').title()}"
+        }
+    }
