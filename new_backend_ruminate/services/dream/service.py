@@ -469,11 +469,11 @@ Return a JSON array with this structure:
     ) -> Optional[Dream]:
         """Generate comprehensive dream analysis using all available information."""
         logger.info(f"=== GENERATE_ANALYSIS START for dream {did} ===")
-        print(f"DEBUG: generate_analysis called for dream {did}, force_regenerate={force_regenerate}")
+        logger.debug(f"generate_analysis called for dream {did}, force_regenerate={force_regenerate}")
         
         if not self._analysis_llm:
             logger.warning("Analysis LLM service not available, cannot generate analysis")
-            print("DEBUG: No analysis LLM available")
+            logger.debug("No analysis LLM available")
             return None
         
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
@@ -506,25 +506,25 @@ Return a JSON array with this structure:
             dream = await self._repo.get_dream(user_id, did, session)
             if not dream:
                 logger.error(f"Dream {did} not found for user {user_id}")
-                print(f"DEBUG: Dream {did} not found")
+                logger.debug(f"Dream {did} not found")
                 await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
                 return None
-            print(f"DEBUG: Dream found: {dream.title}")
+            logger.debug(f"Dream found: {dream.title}")
             
             # Check if analysis already exists and not forcing regeneration
             if dream.analysis and not force_regenerate:
                 logger.info(f"Analysis already exists for dream {did}, returning existing analysis")
-                print(f"DEBUG: Analysis already exists, returning existing")
+                logger.debug("Analysis already exists, returning existing")
                 await self._repo.update_analysis_status(user_id, did, GenerationStatus.COMPLETED, session)
                 return dream
             
             # Validate prerequisites
             if not dream.transcript:
                 logger.error(f"No transcript available for dream {did}, cannot generate analysis")
-                print(f"DEBUG: No transcript available")
+                logger.debug("No transcript available")
                 await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
                 return None
-            print(f"DEBUG: Transcript found: {dream.transcript[:100]}...")
+            logger.debug(f"Transcript found: {len(dream.transcript)} characters")
             
             # Extract all needed data while session is open
             transcript = dream.transcript
@@ -533,7 +533,7 @@ Return a JSON array with this structure:
             additional_info = dream.additional_info
             
         logger.info(f"Generating analysis for dream {did}")
-        print(f"DEBUG: Starting LLM analysis generation")
+        logger.debug("Starting LLM analysis generation")
         
         # Build the comprehensive context
         context_parts = []
@@ -562,9 +562,9 @@ Provide a focused interpretation in 100 words or less. Focus on the most signifi
         
         try:
             # Generate analysis using the analysis LLM
-            print(f"DEBUG: Calling LLM with {len(messages)} messages")
+            logger.debug(f"Calling LLM with {len(messages)} messages")
             analysis_text = await self._analysis_llm.generate_response(messages)
-            print(f"DEBUG: LLM returned analysis: {analysis_text[:100]}...")
+            logger.debug(f"LLM returned analysis: {len(analysis_text)} characters")
             
             # Prepare metadata
             metadata = {
@@ -585,7 +585,7 @@ Provide a focused interpretation in 100 words or less. Focus on the most signifi
                 await self._repo.update_analysis_status(user_id, did, GenerationStatus.COMPLETED, session)
                 
                 logger.info(f"Generated and saved analysis for dream {did}")
-                print(f"DEBUG: Analysis saved successfully")
+                logger.debug("Analysis saved successfully")
                 return updated_dream
             
         except Exception as e:
@@ -604,11 +604,11 @@ Provide a focused interpretation in 100 words or less. Focus on the most signifi
     ) -> Optional[Dream]:
         """Generate expanded dream analysis building on existing analysis."""
         logger.info(f"=== GENERATE_EXPANDED_ANALYSIS START for dream {did} ===")
-        print(f"DEBUG: generate_expanded_analysis called for dream {did}")
+        logger.debug(f"generate_expanded_analysis called for dream {did}")
         
         if not self._analysis_llm:
             logger.warning("Analysis LLM service not available, cannot generate expanded analysis")
-            print("DEBUG: No analysis LLM available")
+            logger.debug("No analysis LLM available")
             return None
         
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
@@ -626,25 +626,25 @@ Provide a focused interpretation in 100 words or less. Focus on the most signifi
             dream = await self._repo.get_dream(user_id, did, session)
             if not dream:
                 logger.error(f"Dream {did} not found for user {user_id}")
-                print(f"DEBUG: Dream {did} not found")
+                logger.debug(f"Dream {did} not found")
                 return None
-            print(f"DEBUG: Dream found: {dream.title}")
+            logger.debug(f"Dream found: {dream.title}")
             
             # Check if expanded analysis already exists
             if dream.expanded_analysis:
                 logger.info(f"Expanded analysis already exists for dream {did}, returning existing")
-                print(f"DEBUG: Expanded analysis already exists")
+                logger.debug("Expanded analysis already exists")
                 return dream
             
             # Validate prerequisites
             if not dream.transcript:
                 logger.error(f"No transcript available for dream {did}")
-                print(f"DEBUG: No transcript available")
+                logger.debug("No transcript available")
                 return None
                 
             if not dream.analysis:
                 logger.error(f"No initial analysis available for dream {did}")
-                print(f"DEBUG: No initial analysis available")
+                logger.debug("No initial analysis available")
                 return None
             
             # Extract all needed data while session is open
@@ -655,7 +655,7 @@ Provide a focused interpretation in 100 words or less. Focus on the most signifi
             existing_analysis = dream.analysis
             
         logger.info(f"Generating expanded analysis for dream {did}")
-        print(f"DEBUG: Starting expanded LLM analysis generation")
+        logger.debug("Starting expanded LLM analysis generation")
         
         # Build the comprehensive context
         context_parts = []
@@ -692,9 +692,9 @@ Build on your initial analysis rather than repeating it. Aim for 300-400 words t
         
         try:
             # Generate expanded analysis using the analysis LLM
-            print(f"DEBUG: Calling LLM for expanded analysis with {len(messages)} messages")
+            logger.debug(f"Calling LLM for expanded analysis with {len(messages)} messages")
             expanded_analysis_text = await self._analysis_llm.generate_response(messages)
-            print(f"DEBUG: LLM returned expanded analysis: {expanded_analysis_text[:100]}...")
+            logger.debug(f"LLM returned expanded analysis: {len(expanded_analysis_text)} characters")
             
             # Prepare metadata
             metadata = {
@@ -713,12 +713,12 @@ Build on your initial analysis rather than repeating it. Aim for 300-400 words t
                 )
                 
                 logger.info(f"Generated and saved expanded analysis for dream {did}")
-                print(f"DEBUG: Expanded analysis saved successfully")
+                logger.debug("Expanded analysis saved successfully")
                 return updated_dream
             
         except Exception as e:
             logger.error(f"Failed to generate expanded analysis for dream {did}: {str(e)}")
-            print(f"DEBUG: Error generating expanded analysis: {str(e)}")
+            logger.debug(f"Error generating expanded analysis: {str(e)}")
             return None
 
     # ───────────────────────────── segments ──────────────────────────────── #

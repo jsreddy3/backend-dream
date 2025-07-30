@@ -42,8 +42,8 @@ class GPT4oTranscriptionService(TranscriptionService):
         """Download the audio at `presigned_url`, then return its transcript."""
         try:
             start_time = time.time()
-            print(f"\n=== GPT-4o Transcription Starting ===")
-            print(f"URL: {presigned_url[:100]}...")
+            logger.info("GPT-4o Transcription Starting")
+            logger.debug(f"URL: {presigned_url[:100]}...")
             
             # 1) Pull the file from your S3/GCS signed URL ─────────────────────────
             download_start = time.time()
@@ -52,13 +52,13 @@ class GPT4oTranscriptionService(TranscriptionService):
                 audio_resp.raise_for_status()
                 download_time = time.time() - download_start
                 file_size_mb = len(audio_resp.content) / (1024 * 1024)
-                print(f"Downloaded audio: {file_size_mb:.2f} MB in {download_time:.2f}s")
+                logger.debug(f"Downloaded audio: {file_size_mb:.2f} MB in {download_time:.2f}s")
 
             # 2) Pass the bytes straight to OpenAI ────────────────────────────────
             #    (OpenAI requires a file-like object; BytesIO keeps everything in-memory)
             audio_file = io.BytesIO(audio_resp.content)
 
-            print(f"Calling OpenAI API with model: {self._MODEL}")
+            logger.debug(f"Calling OpenAI API with model: {self._MODEL}")
             api_start = time.time()
             response = await self._client.audio.transcriptions.create(
                 model=self._MODEL,
@@ -74,7 +74,7 @@ class GPT4oTranscriptionService(TranscriptionService):
                 try:
                     cost = self._calculate_cost(response.usage)
                 except AttributeError as e:
-                    print(f"Error calculating cost: {e}")
+                    logger.warning(f"Error calculating cost: {e}")
                     cost = 0.0
                 
                 # Initialize default values
@@ -92,24 +92,16 @@ class GPT4oTranscriptionService(TranscriptionService):
                 # Estimate audio duration (approximately 100 tokens per second)
                 estimated_duration_seconds = audio_tokens / 100 if audio_tokens > 0 else 0
                 
-                print(f"\n--- Transcription Metrics ---")
-                print(f"Audio duration: ~{estimated_duration_seconds:.1f} seconds")
-                print(f"API processing time: {api_time:.2f} seconds")
-                print(f"Cost: ${cost:.6f}")
-                print(f"Tokens: {audio_tokens} audio, {text_tokens} text")
+                logger.info(f"Transcription metrics - Duration: ~{estimated_duration_seconds:.1f}s, API time: {api_time:.2f}s, Cost: ${cost:.6f}, Tokens: {audio_tokens} audio, {text_tokens} text")
             
-            # Log the full transcript
-            print(f"\n--- Full Transcript ---")
-            print(response.text)
-            print(f"--- End Transcript (length: {len(response.text)} chars) ---")
+            # Log transcript info (not the full text for privacy)
+            logger.debug(f"Transcript generated, length: {len(response.text)} chars")
             
             total_time = time.time() - start_time
-            print(f"\nTotal transcription time: {total_time:.2f} seconds")
-            print(f"=== GPT-4o Transcription Complete ===\n")
+            logger.info(f"GPT-4o Transcription Complete - Total time: {total_time:.2f} seconds")
             
             return response.text
             
         except Exception as e:
-            print(f"ERROR in GPT-4o transcription: {str(e)}")
             logger.error(f"Error in GPT-4o transcription: {str(e)}")
             raise

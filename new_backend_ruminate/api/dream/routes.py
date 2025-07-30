@@ -72,7 +72,7 @@ async def read_dream(
         raise HTTPException(404, "Dream not found")
     result = DreamRead.model_validate(dream).model_dump()
     analysis = result.get('analysis')
-    print(f"DEBUG: GET dream returning - has analysis: {analysis is not None}, analysis length: {len(analysis) if analysis else 0}")
+    logger.debug(f"GET dream returning - has analysis: {analysis is not None}, analysis length: {len(analysis) if analysis else 0}")
     return result
 
 @router.patch("/{did}")
@@ -187,7 +187,7 @@ async def get_upload_url(
     user_id: UUID = Depends(get_current_user_id),
 ):
     key, url = await storage.generate_presigned_put(did, filename)
-    print(f"Generated upload URL {url} with key {key}")
+    logger.debug(f"Generated upload URL for key {key}")
     return UploadUrlResponse(upload_url=url, upload_key=key)
 
 # ─────────────────────── finish & video complete ────────────────────── #
@@ -447,7 +447,6 @@ async def generate_expanded_analysis(
     svc: DreamService = Depends(get_dream_service),
 ):
     """Generate expanded dream analysis building on existing analysis."""
-    print(f"🚨 EXPANDED ANALYSIS ENDPOINT HIT - Dream ID: {did}")
     logger.info(f"Generate expanded analysis endpoint called for dream {did}")
     
     dream = await svc.generate_expanded_analysis(user_id, did)

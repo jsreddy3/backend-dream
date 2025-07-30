@@ -139,7 +139,6 @@ async def get_current_user(token: HTTPAuthorizationCredentials = Depends(_securi
         payload = jwt.decode(token.credentials, settings().jwt_secret, algorithms=["HS256"])
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    print("Token decoded successfully")
     return payload
 
 async def get_current_user_id(

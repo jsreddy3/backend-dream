@@ -6,6 +6,9 @@ import httpx
 from new_backend_ruminate.config import settings
 from new_backend_ruminate.domain.ports.transcription import TranscriptionService
 from new_backend_ruminate.domain.object_storage.repo import ObjectStorageRepository
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class DeepgramTranscriptionService(TranscriptionService):
@@ -22,7 +25,7 @@ class DeepgramTranscriptionService(TranscriptionService):
     # ───────────────────────── public API (port impl) ────────────────────────── #
 
     async def transcribe(self, presigned_url: str) -> str:
-        print("Calling transcription")
+        logger.debug("Calling Deepgram transcription")
         payload = {
             "url": presigned_url,
             "model": "nova-2",
@@ -36,5 +39,5 @@ class DeepgramTranscriptionService(TranscriptionService):
 
         data = resp.json()
         transcription = data["results"]["channels"][0]["alternatives"][0]["transcript"]
-        print("Transcription: ", transcription)
+        logger.debug(f"Transcription completed, length: {len(transcription)} chars")
         return transcription

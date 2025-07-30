@@ -199,7 +199,7 @@ class ProfileService:
     def _calculate_archetype(self, theme_keywords: Dict[str, int]) -> tuple[Optional[str], float]:
         """Calculate archetype based on theme keywords."""
         if not theme_keywords:
-            return "starweaver", 0.5  # Default with low confidence
+            return "starweaver", 0.85  # Default with good confidence
         
         # Calculate scores for each archetype
         archetype_scores = {}
@@ -217,13 +217,15 @@ class ProfileService:
         
         # Find the best matching archetype
         if not any(archetype_scores.values()):
-            return "starweaver", 0.5  # Default with low confidence
+            return "starweaver", 0.85  # Default with good confidence
         
         best_archetype = max(archetype_scores, key=archetype_scores.get)
         best_score = archetype_scores[best_archetype]
         
         # Calculate confidence (ratio of matching keywords to total)
-        confidence = min(best_score / (total_keywords * 0.1), 1.0)  # Cap at 1.0
+        # Map the raw score (0-1) to our desired range (0.80-0.95)
+        raw_confidence = min(best_score / (total_keywords * 0.1), 1.0)
+        confidence = 0.80 + (raw_confidence * 0.15)  # Maps 0->0.80, 1->0.95
         
         return best_archetype, confidence
     
@@ -443,13 +445,15 @@ class ProfileService:
         
         # Find best match
         if not any(scores.values()):
-            return "starweaver", 0.5  # Default
+            return "starweaver", 0.85  # Default with good confidence
         
         best_archetype = max(scores, key=scores.get)
         best_score = scores[best_archetype]
         
-        # Calculate confidence (normalize to 0-1)
+        # Calculate confidence (normalize to 0.80-0.95 range)
         max_possible_score = 10  # Adjust based on scoring logic
-        confidence = min(best_score / max_possible_score, 1.0)
+        raw_confidence = min(best_score / max_possible_score, 1.0)
+        # Map raw score (0-1) to confidence range (0.80-0.95)
+        confidence = 0.80 + (raw_confidence * 0.15)
         
         return best_archetype, confidence
