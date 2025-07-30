@@ -439,3 +439,23 @@ async def get_analysis(
         generated_at=dream.analysis_generated_at,
         metadata=dream.analysis_metadata
     )
+
+@router.post("/{did}/generate-expanded-analysis", response_model=AnalysisResponse)
+async def generate_expanded_analysis(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+):
+    """Generate expanded dream analysis building on existing analysis."""
+    logger.info(f"Generate expanded analysis endpoint called for dream {did}")
+    
+    dream = await svc.generate_expanded_analysis(user_id, did)
+    
+    if not dream or not dream.expanded_analysis:
+        raise HTTPException(400, "Failed to generate expanded analysis. Check if initial analysis exists.")
+    
+    return AnalysisResponse(
+        analysis=dream.expanded_analysis,
+        generated_at=dream.expanded_analysis_generated_at,
+        metadata=dream.expanded_analysis_metadata
+    )

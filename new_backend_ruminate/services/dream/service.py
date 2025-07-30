@@ -552,12 +552,12 @@ Return a JSON array with this structure:
         
         # Prepare the analysis prompt
         messages = [
-            {"role": "system", "content": """You are an expert dream analyst who provides concise, insightful interpretations. Keep your analysis focused and under 200 words."""},
+            {"role": "system", "content": """You are an expert dream analyst who provides concise, insightful interpretations. Keep your analysis focused and under 100 words."""},
             {"role": "user", "content": f"""Please provide a brief but insightful analysis of this dream:
 
 {chr(10).join(context_parts)}
 
-Provide a focused interpretation in 200 words or less. Focus on the most significant symbols and meanings."""}
+Provide a focused interpretation in 100 words or less. Focus on the most significant symbols and meanings."""}
         ]
         
         try:
@@ -595,6 +595,130 @@ Provide a focused interpretation in 200 words or less. Focus on the most signifi
                     await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
             except Exception as update_error:
                 logger.error(f"Failed to update analysis status to failed: {str(update_error)}")
+            return None
+
+    async def generate_expanded_analysis(
+        self, 
+        user_id: UUID, 
+        did: UUID
+    ) -> Optional[Dream]:
+        """Generate expanded dream analysis building on existing analysis."""
+        logger.info(f"=== GENERATE_EXPANDED_ANALYSIS START for dream {did} ===")
+        print(f"DEBUG: generate_expanded_analysis called for dream {did}")
+        
+        if not self._analysis_llm:
+            logger.warning("Analysis LLM service not available, cannot generate expanded analysis")
+            print("DEBUG: No analysis LLM available")
+            return None
+        
+        from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
+        from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
+        
+        # Get the dream and validate prerequisites
+        dream = None
+        transcript = None
+        title = None
+        summary = None
+        additional_info = None
+        existing_analysis = None
+        
+        async with session_scope() as session:
+            dream = await self._repo.get_dream(user_id, did, session)
+            if not dream:
+                logger.error(f"Dream {did} not found for user {user_id}")
+                print(f"DEBUG: Dream {did} not found")
+                return None
+            print(f"DEBUG: Dream found: {dream.title}")
+            
+            # Check if expanded analysis already exists
+            if dream.expanded_analysis:
+                logger.info(f"Expanded analysis already exists for dream {did}, returning existing")
+                print(f"DEBUG: Expanded analysis already exists")
+                return dream
+            
+            # Validate prerequisites
+            if not dream.transcript:
+                logger.error(f"No transcript available for dream {did}")
+                print(f"DEBUG: No transcript available")
+                return None
+                
+            if not dream.analysis:
+                logger.error(f"No initial analysis available for dream {did}")
+                print(f"DEBUG: No initial analysis available")
+                return None
+            
+            # Extract all needed data while session is open
+            transcript = dream.transcript
+            title = dream.title
+            summary = dream.summary
+            additional_info = dream.additional_info
+            existing_analysis = dream.analysis
+            
+        logger.info(f"Generating expanded analysis for dream {did}")
+        print(f"DEBUG: Starting expanded LLM analysis generation")
+        
+        # Build the comprehensive context
+        context_parts = []
+        
+        # 1. Basic dream information
+        context_parts.append(f"Dream Title: {title or 'Untitled'}")
+        context_parts.append(f"\nOriginal Dream Transcript:\n{transcript}")
+        
+        if summary:
+            context_parts.append(f"\nSummary:\n{summary}")
+        
+        if additional_info:
+            context_parts.append(f"\nAdditional Context:\n{additional_info}")
+        
+        # Prepare the expanded analysis prompt
+        messages = [
+            {"role": "system", "content": """You are an expert dream analyst. You've already provided an initial interpretation. Now expand on it with deeper insights, exploring more symbolic meanings, psychological connections, and personal relevance."""},
+            {"role": "user", "content": f"""Here is the dream and your initial analysis:
+
+DREAM CONTEXT:
+{chr(10).join(context_parts)}
+
+YOUR INITIAL ANALYSIS:
+{existing_analysis}
+
+Please expand on this analysis with deeper insights. Explore:
+- More detailed symbolic meanings
+- Psychological connections and patterns
+- Emotional significance and personal relevance
+- Additional layers of interpretation
+
+Build on your initial analysis rather than repeating it. Aim for 300-400 words total, providing rich, nuanced insights."""}
+        ]
+        
+        try:
+            # Generate expanded analysis using the analysis LLM
+            print(f"DEBUG: Calling LLM for expanded analysis with {len(messages)} messages")
+            expanded_analysis_text = await self._analysis_llm.generate_response(messages)
+            print(f"DEBUG: LLM returned expanded analysis: {expanded_analysis_text[:100]}...")
+            
+            # Prepare metadata
+            metadata = {
+                "model": getattr(self._analysis_llm, '_model', 'unknown'),
+                "generated_at": datetime.utcnow().isoformat(),
+                "type": "expanded"
+            }
+            
+            # Save expanded analysis to database
+            async with session_scope() as session:
+                updated_dream = await self._repo.update_expanded_analysis(
+                    user_id, did, 
+                    expanded_analysis_text, 
+                    metadata, 
+                    session
+                )
+                
+                logger.info(f"Generated and saved expanded analysis for dream {did}")
+                print(f"DEBUG: Expanded analysis saved successfully")
+                return updated_dream
+            
+        except Exception as e:
+            logger.error(f"Failed to generate expanded analysis for dream {did}: {str(e)}")
+            print(f"DEBUG: Error generating expanded analysis: {str(e)}")
             return None
 
     # ───────────────────────────── segments ──────────────────────────────── #
