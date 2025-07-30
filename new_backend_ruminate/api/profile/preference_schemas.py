@@ -73,6 +73,9 @@ class PreferencesCreate(BaseModel):
     personality_traits: Dict[str, Any] = Field(default_factory=dict)
     onboarding_completed: bool = False
     
+    # Onboarding journey tracking
+    onboarding_journey: Optional[Dict[str, Any]] = Field(default=None, description="Complete onboarding interaction data")
+    
     @validator('reminder_days')
     def validate_reminder_days(cls, v, values):
         """Validate reminder days are valid weekdays."""
@@ -147,6 +150,9 @@ class PreferencesRead(BaseModel):
     initial_archetype: Optional[str]
     personality_traits: Dict[str, Any]
     onboarding_completed: bool
+    
+    # Onboarding journey tracking
+    onboarding_journey: Optional[Dict[str, Any]]
     
     # Timestamps
     created_at: datetime
