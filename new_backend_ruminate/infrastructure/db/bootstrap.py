@@ -84,6 +84,8 @@ async def init_engine(settings: "Settings") -> None:
 
     # -- Phase 1: URL synthesis ------------------------------------------------
     dialect = settings.db_dialect  # 'postgresql' | 'sqlite' | …
+    connect_args = {}  # JSV-428 FIX: Prepare connect_args for database-specific timeouts
+    
     if dialect == "postgresql":
         url = URL.create(
             drivername="postgresql+asyncpg",
@@ -94,10 +96,19 @@ async def init_engine(settings: "Settings") -> None:
             database=settings.db_name,
         )
         pool_cls = QueuePool
+        # JSV-428 FIX: PostgreSQL-specific timeout configuration
+        connect_args = {
+            "command_timeout": 60,  # Individual query timeout (60 seconds)
+            "server_settings": {
+                "statement_timeout": "60s"  # PostgreSQL statement timeout
+            }
+        }
     elif dialect == "sqlite":
         url = settings.db_url
         # SQLite in async mode is already serialised; no pool needed.
         pool_cls = NullPool
+        # JSV-428 FIX: SQLite timeout (if needed in future)
+        connect_args = {"timeout": 60}
     else:
         raise ValueError(f"Unsupported dialect {dialect!r}")
 
@@ -114,6 +125,8 @@ async def init_engine(settings: "Settings") -> None:
         # `pool_recycle` seconds to mitigate NAT/firewall timeouts seen on
         # some networks.
         pool_recycle = 1800,
+        # JSV-428 FIX: Add database connection and query timeouts
+        pool_timeout = 30,  # Connection acquisition timeout (30 seconds)
     )
 
     if pool_cls is QueuePool:
@@ -122,8 +135,10 @@ async def init_engine(settings: "Settings") -> None:
             max_overflow=settings.max_overflow,
         )
     
+    # JSV-428 FIX: Add connect_args to engine creation
     engine = create_async_engine(
         url,
+        connect_args=connect_args,
         **kw,
     )
 

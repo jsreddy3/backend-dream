@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from fastapi.responses import StreamingResponse
-from typing import List
+from typing import List, Dict, Any
 import logging
 from datetime import datetime
 
@@ -618,3 +618,172 @@ async def generate_dream_image(
         dream.image_status = GenerationStatus.FAILED.value
         await db.commit()
         raise HTTPException(500, f"Image generation failed: {str(e)}")
+
+# ───────────────────────── Debug & Recovery Endpoints ─────────────────────────────── #
+
+@router.get("/{did}/debug", response_model=Dict[str, Any])
+async def debug_dream_status(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get comprehensive debug information about a dream's status."""
+    logger.info(f"Debug endpoint called for dream {did}")
+    
+    # Get dream with detailed segment information
+    dream = await svc.get_dream(user_id, did, db)
+    if not dream:
+        # Try to get dream without user constraint to check ownership issues
+        from new_backend_ruminate.infrastructure.implementations.dream.rds_dream_repository import RDSDreamRepository
+        repo = RDSDreamRepository()
+        unscoped_dream = await repo.get_dream(None, did, db)
+        
+        if unscoped_dream:
+            raise HTTPException(403, f"Dream exists but belongs to user {unscoped_dream.user_id}, not {user_id}")
+        else:
+            raise HTTPException(404, "Dream not found")
+    
+    # Analyze segments
+    segment_analysis = []
+    for i, seg in enumerate(dream.segments):
+        segment_info = {
+            "order": seg.order,
+            "modality": seg.modality,
+            "transcription_status": seg.transcription_status,
+            "has_transcript": bool(seg.transcript and seg.transcript.strip()),
+            "transcript_length": len(seg.transcript) if seg.transcript else 0,
+            "has_filename": bool(seg.filename),
+            "filename": seg.filename,
+            "has_s3_key": bool(seg.s3_key),
+            "s3_key": seg.s3_key,
+            "duration": seg.duration,
+        }
+        
+        # Identify issues
+        issues = []
+        if seg.transcription_status == 'failed':
+            issues.append("Transcription failed")
+        if seg.modality == 'audio' and not seg.s3_key:
+            issues.append("Missing S3 key")
+        if seg.modality == 'audio' and not seg.transcript:
+            issues.append("Missing transcript")
+        
+        segment_info["issues"] = issues
+        segment_analysis.append(segment_info)
+    
+    # Overall dream analysis
+    dream_issues = []
+    if not dream.transcript:
+        dream_issues.append("No transcript")
+    if dream.state == 'draft':
+        dream_issues.append("Still in draft state")
+    
+    recovery_suggestions = []
+    failed_segments = [s for s in dream.segments if s.transcription_status == 'failed']
+    completed_segments = [s for s in dream.segments if s.transcription_status == 'completed']
+    
+    if failed_segments:
+        recovery_suggestions.append(f"Retry transcription for {len(failed_segments)} failed segments")
+    if completed_segments:
+        recovery_suggestions.append(f"Use partial recovery from {len(completed_segments)} successful segments")
+    if not dream.segments:
+        recovery_suggestions.append("Dream has no segments - likely corrupted sync")
+    
+    return {
+        "dream_id": str(did),
+        "user_id": str(user_id),
+        "title": dream.title,
+        "state": dream.state,
+        "has_transcript": bool(dream.transcript and dream.transcript.strip()),
+        "transcript_length": len(dream.transcript) if dream.transcript else 0,
+        "created_at": dream.created_at.isoformat(),
+        "segment_count": len(dream.segments),
+        "segments": segment_analysis,
+        "dream_issues": dream_issues,
+        "recovery_suggestions": recovery_suggestions,
+        "debug_timestamp": datetime.utcnow().isoformat()
+    }
+
+@router.post("/{did}/force-recovery")
+async def force_dream_recovery(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Force attempt comprehensive recovery on a problematic dream."""
+    logger.info(f"Force recovery endpoint called for dream {did}")
+    
+    dream = await svc.get_dream(user_id, did, db)
+    if not dream:
+        raise HTTPException(404, "Dream not found")
+    
+    # Attempt recovery using the same logic as generate_analysis
+    try:
+        recovery_result = await svc._attempt_dream_recovery(user_id, did, dream, db)
+        
+        if recovery_result['success']:
+            # Return updated dream status
+            updated_dream = await svc.get_dream(user_id, did, db)
+            return {
+                "success": True,
+                "method": recovery_result.get('method', 'unknown'),
+                "message": "Dream recovery successful",
+                "dream": {
+                    "id": str(did),
+                    "title": updated_dream.title if updated_dream else "Unknown",
+                    "has_transcript": bool(updated_dream.transcript) if updated_dream else False,
+                    "transcript_length": len(updated_dream.transcript) if updated_dream and updated_dream.transcript else 0,
+                    "state": updated_dream.state if updated_dream else "unknown"
+                }
+            }
+        else:
+            return {
+                "success": False,
+                "error": recovery_result.get('error', 'Unknown error'),
+                "message": "Dream recovery failed"
+            }
+            
+    except Exception as e:
+        logger.error(f"Force recovery failed for dream {did}: {str(e)}")
+        raise HTTPException(500, f"Recovery process failed: {str(e)}")
+
+@router.get("/{did}/segments/status")
+async def get_segments_status(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get detailed status of all segments for a dream."""
+    logger.info(f"Segments status endpoint called for dream {did}")
+    
+    dream = await svc.get_dream(user_id, did, db)
+    if not dream:
+        raise HTTPException(404, "Dream not found")
+    
+    segments_status = []
+    for seg in dream.segments:
+        status = {
+            "id": str(seg.id),
+            "order": seg.order,
+            "modality": seg.modality,
+            "transcription_status": seg.transcription_status,
+            "has_transcript": bool(seg.transcript and seg.transcript.strip()),
+            "transcript_preview": seg.transcript[:100] + "..." if seg.transcript and len(seg.transcript) > 100 else seg.transcript,
+            "filename": seg.filename,
+            "s3_key": seg.s3_key,
+            "duration": seg.duration,
+            "can_retry": seg.transcription_status == 'failed' and bool(seg.s3_key)
+        }
+        segments_status.append(status)
+    
+    return {
+        "dream_id": str(did),
+        "total_segments": len(segments_status),
+        "failed_count": len([s for s in segments_status if s["transcription_status"] == "failed"]),
+        "completed_count": len([s for s in segments_status if s["transcription_status"] == "completed"]),
+        "pending_count": len([s for s in segments_status if s["transcription_status"] == "pending"]),
+        "segments": segments_status
+    }

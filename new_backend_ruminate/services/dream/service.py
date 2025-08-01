@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 import asyncio
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from uuid import UUID
 import json
 import logging
@@ -159,6 +159,190 @@ class DreamService:
                     return " ".join(transcript_parts)
         
         return None
+    
+    async def _attempt_dream_recovery(self, user_id: UUID, did: UUID, dream: Dream, session: AsyncSession) -> Dict[str, Any]:
+        """
+        Comprehensive recovery attempt for dreams with failed/missing transcripts.
+        Returns dict with 'success' bool and 'error' string if failed.
+        """
+        logger.info(f"=== Starting comprehensive recovery for dream {did} ===")
+        
+        try:
+            # First, ensure user ownership is correct
+            ownership_fixed = await self._fix_user_ownership_if_needed(user_id, did, dream, session)
+            if not ownership_fixed:
+                return {
+                    'success': False,
+                    'error': 'User ownership could not be established - dream may belong to different user'
+                }
+            
+            # Analyze segments to understand the failure mode
+            if not dream.segments or len(dream.segments) == 0:
+                logger.error(f"Dream {did} has no segments - cannot recover")
+                return {
+                    'success': False,
+                    'error': 'Dream has no segments to process - likely corrupted during offline sync'
+                }
+            
+            logger.info(f"Analyzing {len(dream.segments)} segments for recovery options")
+            
+            # Categorize segments by status
+            failed_segments = []
+            completed_segments = []
+            pending_segments = []
+            text_segments = []
+            
+            for i, seg in enumerate(dream.segments):
+                logger.debug(f"  Segment {i}: status={seg.transcription_status}, modality={seg.modality}, has_transcript={bool(seg.transcript)}")
+                
+                if seg.modality == 'text':
+                    text_segments.append(seg)
+                elif seg.transcription_status == 'failed':
+                    failed_segments.append(seg)
+                elif seg.transcription_status == 'completed':
+                    completed_segments.append(seg)
+                elif seg.transcription_status == 'pending':
+                    pending_segments.append(seg)
+            
+            logger.info(f"Segment analysis: {len(failed_segments)} failed, {len(completed_segments)} completed, {len(pending_segments)} pending, {len(text_segments)} text")
+            
+            # Strategy 1: If we have some successful segments, try partial recovery
+            if completed_segments or text_segments:
+                logger.info("Attempting partial recovery from successful segments")
+                try:
+                    partial_transcript = await self._create_partial_transcript(completed_segments + text_segments)
+                    if partial_transcript and len(partial_transcript.strip()) > 10:  # Minimum viable transcript
+                        dream.transcript = partial_transcript
+                        dream.state = DreamStatus.TRANSCRIBED.value
+                        await session.commit()
+                        logger.info(f"Partial recovery successful: {len(partial_transcript)} chars")
+                        return {'success': True, 'method': 'partial_recovery'}
+                except Exception as e:
+                    logger.warning(f"Partial recovery failed: {str(e)}")
+            
+            # Strategy 2: Retry failed segments if they have S3 keys
+            if failed_segments:
+                logger.info(f"Attempting to retry {len(failed_segments)} failed segments")
+                recovery_count = 0
+                
+                for seg in failed_segments:
+                    if seg.s3_key and seg.modality == 'audio':
+                        logger.info(f"Retrying transcription for segment {seg.id} with S3 key {seg.s3_key}")
+                        try:
+                            # Reset segment status and retry transcription
+                            seg.transcription_status = 'pending'
+                            await session.commit()
+                            
+                            # Trigger transcription - generate presigned URL from S3 key
+                            if self._transcribe:
+                                logger.debug(f"Generating presigned URL for S3 key: {seg.s3_key}")
+                                presigned_url = await self._storage.generate_presigned_get_by_key(seg.s3_key)
+                                logger.debug(f"Generated presigned URL for segment {seg.id}")
+                                transcript = await self._transcribe.transcribe(presigned_url)
+                                if transcript and len(transcript.strip()) > 0:
+                                    seg.transcript = transcript
+                                    seg.transcription_status = 'completed'
+                                    recovery_count += 1
+                                    logger.info(f"Successfully recovered segment {seg.id}: {len(transcript)} chars")
+                                else:
+                                    seg.transcription_status = 'failed'
+                                    logger.warning(f"Retry transcription returned empty for segment {seg.id}")
+                            else:
+                                logger.warning("No transcription service available for retry")
+                                seg.transcription_status = 'failed'
+                        except Exception as e:
+                            logger.error(f"Failed to retry transcription for segment {seg.id}: {str(e)}")
+                            seg.transcription_status = 'failed'
+                
+                await session.commit()
+                
+                if recovery_count > 0:
+                    logger.info(f"Recovered {recovery_count} segments, attempting to finish dream")
+                    try:
+                        # Now try the normal finish process
+                        await self.finish_dream(user_id, did)
+                        return {'success': True, 'method': 'segment_retry', 'recovered_segments': recovery_count}
+                    except Exception as e:
+                        logger.error(f"Failed to finish dream after segment recovery: {str(e)}")
+            
+            # Strategy 3: Check if this is a text-only dream
+            if text_segments and not failed_segments and not completed_segments and not pending_segments:
+                logger.info("Dream appears to be text-only, creating transcript from text segments")
+                try:
+                    text_transcript = await self._create_partial_transcript(text_segments)
+                    if text_transcript and len(text_transcript.strip()) > 0:
+                        dream.transcript = text_transcript
+                        dream.state = DreamStatus.TRANSCRIBED.value
+                        await session.commit()
+                        logger.info(f"Text-only recovery successful: {len(text_transcript)} chars")
+                        return {'success': True, 'method': 'text_only_recovery'}
+                except Exception as e:
+                    logger.error(f"Text-only recovery failed: {str(e)}")
+            
+            # If we get here, all recovery strategies failed
+            logger.error(f"All recovery strategies failed for dream {did}")
+            return {
+                'success': False,
+                'error': f'All recovery attempts failed - {len(failed_segments)} segments have failed transcription and cannot be recovered'
+            }
+            
+        except Exception as e:
+            logger.error(f"Dream recovery process crashed for {did}: {str(e)}")
+            return {
+                'success': False,
+                'error': f'Recovery process error: {str(e)}'
+            }
+    
+    async def _fix_user_ownership_if_needed(self, user_id: UUID, did: UUID, dream: Dream, session: AsyncSession) -> bool:
+        """Fix user ownership issues if detected."""
+        try:
+            # Check if dream is accessible by the user
+            user_dream = await self._repo.get_dream(user_id, did, session)
+            if user_dream:
+                return True  # Already accessible
+            
+            # Check if dream exists but with different/null user_id
+            unscoped_dream = await self._repo.get_dream(None, did, session)
+            if unscoped_dream:
+                logger.warning(f"Dream {did} exists but not accessible by user {user_id} - attempting ownership repair")
+                
+                # Check if dream has no user_id (orphaned)
+                if not unscoped_dream.user_id:
+                    logger.info(f"Dream {did} is orphaned (no user_id), assigning to user {user_id}")
+                    unscoped_dream.user_id = user_id
+                    await session.commit()
+                    return True
+                else:
+                    # Dream belongs to different user - this is more complex
+                    logger.error(f"Dream {did} belongs to different user {unscoped_dream.user_id}, cannot reassign to {user_id}")
+                    return False
+            
+            logger.error(f"Dream {did} not found in database at all")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error fixing user ownership for dream {did}: {str(e)}")
+            return False
+    
+    async def _create_partial_transcript(self, segments: List) -> str:
+        """Create transcript from successful segments."""
+        if not segments:
+            return ""
+        
+        # Sort by order and combine transcripts
+        sorted_segments = sorted(segments, key=lambda s: s.order)
+        transcript_parts = []
+        
+        for seg in sorted_segments:
+            if seg.transcript and seg.transcript.strip():
+                transcript_parts.append(seg.transcript.strip())
+            elif seg.modality == 'text' and hasattr(seg, 'text') and seg.text:
+                # For text segments, use the text field if transcript is empty
+                transcript_parts.append(seg.text.strip())
+        
+        combined = " ".join(transcript_parts)
+        logger.debug(f"Created partial transcript from {len(transcript_parts)} segments: {len(combined)} chars")
+        return combined
 
     async def generate_title_and_summary(self, user_id: UUID, did: UUID) -> Optional[Dream]:
         """Generate AI title and summary from dream transcript."""
@@ -234,16 +418,18 @@ Return a JSON object with 'title' and 'summary' fields."""}
         }
         
         try:
-            # Use async LLM call with structured response using dedicated summary LLM
+            # JSV-428 FIX: External LLM call with NO database session open
+            logger.debug(f"Starting LLM call for dream {did} - no DB session held")
             result = await self._summary_llm.generate_structured_response(
                 messages=messages,
                 response_format={"type": "json_object"},
                 json_schema=json_schema
             )
+            logger.debug(f"LLM call completed for dream {did}")
             
             logger.info(f"Generated title: {result.get('title')}, summary length: {len(result.get('summary', ''))}")
             
-            # Update the dream with generated title and summary
+            # JSV-428 FIX: Quick DB write after external call completes
             async with session_scope() as session:
                 updated_dream = await self._repo.update_title_and_summary(
                     user_id, did, 
@@ -254,6 +440,7 @@ Return a JSON object with 'title' and 'summary' fields."""}
                 
                 # Mark summary generation as completed
                 await self._repo.update_summary_status(user_id, did, GenerationStatus.COMPLETED, session)
+                logger.debug(f"Dream {did} title/summary saved to database")
                 
                 return updated_dream
             
@@ -518,32 +705,26 @@ Return a JSON array with this structure:
                 await self._repo.update_analysis_status(user_id, did, GenerationStatus.COMPLETED, session)
                 return dream
             
-            # Validate prerequisites - handle incomplete dreams gracefully
+            # Enhanced recovery logic for problematic dreams
             if not dream.transcript:
-                # Check if this is an incomplete dream with segments that need processing
-                if dream.segments and len(dream.segments) > 0:
-                    logger.info(f"Dream {did} has segments but no transcript - attempting to process incomplete dream")
-                    logger.debug(f"Found {len(dream.segments)} segments, triggering processing")
-                    await self._repo.update_analysis_status(user_id, did, GenerationStatus.PENDING, session)
-                    
-                    # Attempt to finish the dream (transcribe segments and generate summary)
-                    try:
-                        await self.finish_dream(user_id, did)
-                        # Re-fetch the dream to get the updated transcript
-                        dream = await self._repo.get_dream(user_id, did, session)
-                        if dream and dream.transcript:
-                            logger.info(f"Successfully processed incomplete dream {did}, transcript now available")
-                        else:
-                            logger.error(f"Dream processing completed but still no transcript for dream {did}")
-                            await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
-                            return None
-                    except Exception as e:
-                        logger.error(f"Failed to process incomplete dream {did}: {str(e)}")
+                logger.info(f"Dream {did} has no transcript - attempting comprehensive recovery")
+                
+                # Analyze the dream's segments to determine recovery strategy
+                recovery_result = await self._attempt_dream_recovery(user_id, did, dream, session)
+                
+                if recovery_result['success']:
+                    # Re-fetch the dream after recovery
+                    dream = await self._repo.get_dream(user_id, did, session)
+                    if dream and dream.transcript:
+                        logger.info(f"Successfully recovered dream {did}, transcript now available: {len(dream.transcript)} chars")
+                    else:
+                        logger.error(f"Dream recovery indicated success but still no transcript for dream {did}")
                         await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
                         return None
                 else:
-                    logger.error(f"No transcript or segments available for dream {did}, cannot generate analysis")
-                    logger.debug("No transcript or segments available")
+                    # Recovery failed - provide detailed error information
+                    error_msg = recovery_result.get('error', 'Unknown recovery error')
+                    logger.error(f"Failed to recover dream {did}: {error_msg}")
                     await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
                     return None
             logger.debug(f"Transcript found: {len(dream.transcript)} characters")
@@ -583,9 +764,10 @@ Provide a focused interpretation in 100 words or less. Focus on the most signifi
         ]
         
         try:
-            # Generate analysis using the analysis LLM
-            logger.debug(f"Calling LLM with {len(messages)} messages")
+            # JSV-428 FIX: External LLM call with NO database session open
+            logger.debug(f"Starting LLM analysis call for dream {did} - no DB session held")
             analysis_text = await self._analysis_llm.generate_response(messages)
+            logger.debug(f"LLM analysis call completed for dream {did}")
             logger.debug(f"LLM returned analysis: {len(analysis_text)} characters")
             
             # Prepare metadata
@@ -594,7 +776,7 @@ Provide a focused interpretation in 100 words or less. Focus on the most signifi
                 "generated_at": datetime.utcnow().isoformat(),
             }
             
-            # Save analysis to database
+            # JSV-428 FIX: Quick DB write after external call completes
             async with session_scope() as session:
                 updated_dream = await self._repo.update_analysis(
                     user_id, did, 
@@ -1016,13 +1198,17 @@ Keep each section concise (2-3 sentences). Focus on new insights not covered in 
             logger.error(f"Failed to update segment status to processing: {str(e)}")
         
         try:
+            # JSV-428 FIX: Generate presigned URL with no session open
             key, url = await self._storage.generate_presigned_get(did, filename)
             logger.info(f"Generated presigned URL for segment {sid}")
             
+            # JSV-428 FIX: External transcription call with NO database session open
+            logger.debug(f"Starting transcription call for segment {sid} - no DB session held")
             transcript = await self._transcribe.transcribe(url)
+            logger.debug(f"Transcription call completed for segment {sid}")
             logger.info(f"Transcription result for segment {sid}: '{transcript[:100] if transcript else '(empty)'}...'")
             
-            # treating empty transcript as valid
+            # JSV-428 FIX: Quick DB write after external call completes
             if transcript is not None:
                 async with session_scope() as session:
                     # update_segment_transcript now sets status to 'completed' automatically
