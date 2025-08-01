@@ -3,7 +3,7 @@
 
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from new_backend_ruminate.domain.user.entities import User
@@ -23,8 +23,7 @@ async def create_test_data():
             id=uuid.UUID('11111111-1111-1111-1111-111111111111'),
             google_sub='test_google_sub_123',
             email='test@example.com',
-            name='Test User',
-            created_at=datetime.utcnow()
+            name='Test User'
         )
         
         # Check if user already exists
@@ -47,8 +46,7 @@ async def create_test_data():
             The cabin had smoke coming from its chimney. I approached the door and knocked, 
             but no one answered. I decided to enter anyway. Inside, I found a table set for two, 
             with fresh bread and soup still steaming. It felt like someone had just left moments ago.""",
-            state="completed",
-            created_at=datetime.utcnow()
+            state="completed"
         )
         
         # Check if dream already exists
@@ -64,14 +62,13 @@ async def create_test_data():
     
     # Generate JWT token for the test user
     from jose import jwt
-    from datetime import timedelta
     
     secret = settings().jwt_secret
     payload = {
         'sub': 'test_google_sub_123',
         'email': 'test@example.com',
         'uid': str(test_user.id),
-        'exp': datetime.utcnow() + timedelta(days=7)
+        'exp': datetime.now(timezone.utc) + timedelta(days=7)
     }
     token = jwt.encode(payload, secret, algorithm='HS256')
     
@@ -88,6 +85,42 @@ curl -X POST http://localhost:8000/dreams/{test_dream.id}/generate-summary \\
   -H "Authorization: Bearer {token}" | jq
 """)
     print("="*60)
+
+def create_test_dream(token):
+    """Create a test dream and return its ID"""
+    import requests
+    
+    # First create a dream via API
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    dream_data = {
+        "id": str(uuid.uuid4()),
+        "title": "Test Dream for Image Generation",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    response = requests.post(
+        "http://localhost:8000/dreams",
+        json=dream_data,
+        headers=headers
+    )
+    
+    if response.status_code == 201:
+        dream = response.json()
+        dream_id = dream["id"]
+        
+        # Add a transcript to the dream
+        update_data = {"transcript": "I was flying over a beautiful landscape of mountains and rivers. The sun was setting and everything was bathed in golden light."}
+        
+        response = requests.patch(
+            f"http://localhost:8000/dreams/{dream_id}",
+            json=update_data,
+            headers=headers
+        )
+        
+        return dream_id
+    else:
+        raise Exception(f"Failed to create dream: {response.text}")
 
 if __name__ == "__main__":
     asyncio.run(create_test_data())

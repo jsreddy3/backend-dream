@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi.responses import StreamingResponse
 from typing import List
 import logging
+from datetime import datetime
 
 from new_backend_ruminate.infrastructure.sse.hub import EventStreamHub
 from new_backend_ruminate.services.dream.service import DreamService
@@ -459,3 +460,116 @@ async def generate_expanded_analysis(
         generated_at=dream.expanded_analysis_generated_at,
         metadata=dream.expanded_analysis_metadata
     )
+
+# ─────────────────────────── Image Generation ─────────────────────────── #
+
+@router.post("/test-image-generation")
+async def test_image_generation(
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Test endpoint for DALL-E 3 integration"""
+    from new_backend_ruminate.services.image_generation.service import ImageGenerationService
+    
+    logger.info("Test image generation endpoint called")
+    
+    service = ImageGenerationService()
+    image_url = await service.test_generation()
+    
+    if not image_url:
+        raise HTTPException(500, "Failed to generate test image")
+    
+    return {
+        "url": image_url,
+        "time": time.time(),
+        "message": "Test image generated successfully"
+    }
+
+@router.post("/{did}/generate-image")
+async def generate_dream_image(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session),
+):
+    """Generate an image for a dream"""
+    from new_backend_ruminate.services.image_generation.service import ImageGenerationService
+    from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
+    
+    # Get the dream
+    dream = await svc.get_dream(user_id, did, db)
+    if not dream:
+        raise HTTPException(404, "Dream not found")
+    
+    # Check if image already exists
+    if dream.image_url and dream.image_status == GenerationStatus.COMPLETED.value:
+        return {
+            "url": dream.image_url,
+            "prompt": dream.image_prompt,
+            "generated_at": dream.image_generated_at,
+            "message": "Image already exists"
+        }
+    
+    # Check if we have transcript or summary to work with
+    if not dream.transcript and not dream.summary:
+        raise HTTPException(400, "Dream must have transcript or summary before generating image")
+    
+    # Update status to processing
+    dream.image_status = GenerationStatus.PROCESSING.value
+    await db.commit()
+    
+    try:
+        # Generate image (we'll improve the prompt in Phase 2)
+        img_service = ImageGenerationService()
+        prompt = f"Dreamlike artistic visualization of: {(dream.summary or dream.transcript)[:200]}"
+        
+        s3_url, used_prompt, error_type = await img_service.generate_and_store_image(
+            user_id=user_id,
+            dream_id=did,
+            prompt=prompt
+        )
+        
+        if not s3_url:
+            if error_type == "content_policy_violation":
+                dream.image_status = "policy_violation"
+                await db.commit()
+                raise HTTPException(
+                    422, 
+                    detail={
+                        "error": "content_policy_violation",
+                        "message": "This dream contains content that was flagged by our copyright and safety system"
+                    }
+                )
+            else:
+                dream.image_status = GenerationStatus.FAILED.value
+                await db.commit()
+                raise HTTPException(500, "Failed to generate image")
+        
+        # Update dream with image info
+        dream.image_url = s3_url
+        dream.image_prompt = used_prompt
+        dream.image_generated_at = datetime.utcnow()
+        dream.image_status = GenerationStatus.COMPLETED.value
+        dream.image_metadata = {
+            "model": "dall-e-3",
+            "size": "1024x1024",
+            "quality": "standard",
+            "style": "vivid"
+        }
+        
+        await db.commit()
+        
+        return {
+            "url": dream.image_url,
+            "prompt": dream.image_prompt,
+            "generated_at": dream.image_generated_at,
+            "message": "Image generated successfully"
+        }
+        
+    except HTTPException:
+        # Re-raise HTTPException without wrapping (for 422 content policy violations)
+        raise
+    except Exception as e:
+        logger.error(f"Error generating image for dream {did}: {str(e)}")
+        dream.image_status = GenerationStatus.FAILED.value
+        await db.commit()
+        raise HTTPException(500, f"Image generation failed: {str(e)}")

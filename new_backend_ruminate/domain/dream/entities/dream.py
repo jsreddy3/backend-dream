@@ -53,6 +53,13 @@ class Dream(Base):
     video_metadata   = Column(JSON, nullable=True)  # Metadata from pipeline
     video_started_at = Column(DateTime, nullable=True)  # When generation started
     video_completed_at = Column(DateTime, nullable=True)  # When generation completed
+    
+    # Image generation fields
+    image_url        = Column(String(500), nullable=True)  # S3 URL
+    image_prompt     = Column(Text, nullable=True)  # Generated prompt
+    image_generated_at = Column(DateTime, nullable=True)  # When image was generated
+    image_status     = Column(String(20), nullable=True)  # GenerationStatus enum
+    image_metadata   = Column(JSON, nullable=True)  # Metadata (style, model, etc)
 
     segments  = relationship(
         "Segment",

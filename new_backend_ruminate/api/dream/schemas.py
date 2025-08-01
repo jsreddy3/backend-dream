@@ -62,6 +62,12 @@ class DreamRead(DreamBase):
     state: str
     segments: List[SegmentRead] = []
     video_url: Optional[str] = None
+    # Image generation fields
+    image_url: Optional[str] = None
+    image_prompt: Optional[str] = None
+    image_generated_at: Optional[datetime] = None
+    image_status: Optional[str] = None
+    image_metadata: Optional[dict] = None
     
     @property  
     def video_s3_key(self) -> Optional[str]:
