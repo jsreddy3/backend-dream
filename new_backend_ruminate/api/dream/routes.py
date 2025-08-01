@@ -211,6 +211,44 @@ async def finish_dream(
     
     return DreamRead.model_validate(dream).model_dump()
 
+@router.post("/{did}/reprocess", response_model=DreamRead)
+async def reprocess_incomplete_dream(
+    did: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    svc: DreamService = Depends(get_dream_service),
+    db: AsyncSession = Depends(get_session)
+):
+    """Reprocess an incomplete dream that has segments but no transcript."""
+    logger.info(f"Reprocess dream endpoint called for dream {did}")
+    
+    # Check if dream exists and needs reprocessing
+    dream = await svc.get_dream(user_id, did, db)
+    if not dream:
+        raise HTTPException(404, "Dream not found")
+    
+    if dream.transcript:
+        logger.info(f"Dream {did} already has transcript, returning current state")
+        return DreamRead.model_validate(dream).model_dump()
+    
+    if not dream.segments or len(dream.segments) == 0:
+        raise HTTPException(400, "Dream has no segments to process")
+    
+    # Process the incomplete dream
+    try:
+        await svc.finish_dream(user_id, did)
+        logger.info(f"Dream {did} reprocessed successfully")
+        
+        # Return the updated dream
+        updated_dream = await svc.get_dream(user_id, did, db)
+        if not updated_dream:
+            raise HTTPException(404, "Dream not found after processing")
+        
+        return DreamRead.model_validate(updated_dream).model_dump()
+        
+    except Exception as e:
+        logger.error(f"Failed to reprocess dream {did}: {str(e)}")
+        raise HTTPException(400, f"Failed to reprocess dream: {str(e)}")
+
 @router.post("/{did}/generate-video")
 async def generate_video(did: UUID, user_id: UUID = Depends(get_current_user_id), svc: DreamService = Depends(get_dream_service)):
     logger.info(f"Generate video endpoint called for dream {did}")
@@ -411,8 +449,15 @@ async def generate_analysis(
         force_regenerate=request.force_regenerate
     )
     
-    if not dream or not dream.analysis:
-        raise HTTPException(400, "Failed to generate analysis. Check if transcript is available.")
+    if not dream:
+        raise HTTPException(400, "Dream not found or could not be processed.")
+    
+    if not dream.analysis:
+        # Check if dream has segments but no transcript (incomplete dream)
+        if dream.segments and len(dream.segments) > 0 and not dream.transcript:
+            raise HTTPException(400, "Dream is being processed. Segments are being transcribed, please try again in a few moments.")
+        else:
+            raise HTTPException(400, "Failed to generate analysis. Check if transcript is available.")
     
     return AnalysisResponse(
         analysis=dream.analysis,

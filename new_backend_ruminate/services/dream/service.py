@@ -518,12 +518,34 @@ Return a JSON array with this structure:
                 await self._repo.update_analysis_status(user_id, did, GenerationStatus.COMPLETED, session)
                 return dream
             
-            # Validate prerequisites
+            # Validate prerequisites - handle incomplete dreams gracefully
             if not dream.transcript:
-                logger.error(f"No transcript available for dream {did}, cannot generate analysis")
-                logger.debug("No transcript available")
-                await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
-                return None
+                # Check if this is an incomplete dream with segments that need processing
+                if dream.segments and len(dream.segments) > 0:
+                    logger.info(f"Dream {did} has segments but no transcript - attempting to process incomplete dream")
+                    logger.debug(f"Found {len(dream.segments)} segments, triggering processing")
+                    await self._repo.update_analysis_status(user_id, did, GenerationStatus.PENDING, session)
+                    
+                    # Attempt to finish the dream (transcribe segments and generate summary)
+                    try:
+                        await self.finish_dream(user_id, did)
+                        # Re-fetch the dream to get the updated transcript
+                        dream = await self._repo.get_dream(user_id, did, session)
+                        if dream and dream.transcript:
+                            logger.info(f"Successfully processed incomplete dream {did}, transcript now available")
+                        else:
+                            logger.error(f"Dream processing completed but still no transcript for dream {did}")
+                            await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
+                            return None
+                    except Exception as e:
+                        logger.error(f"Failed to process incomplete dream {did}: {str(e)}")
+                        await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
+                        return None
+                else:
+                    logger.error(f"No transcript or segments available for dream {did}, cannot generate analysis")
+                    logger.debug("No transcript or segments available")
+                    await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
+                    return None
             logger.debug(f"Transcript found: {len(dream.transcript)} characters")
             
             # Extract all needed data while session is open
