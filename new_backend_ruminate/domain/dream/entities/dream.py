@@ -43,6 +43,7 @@ class Dream(Base):
     
     # Expanded analysis fields
     expanded_analysis = Column(Text, nullable=True)
+    expanded_analysis_status = Column(String(20), nullable=True)  # GenerationStatus enum
     expanded_analysis_generated_at = Column(DateTime, nullable=True)
     expanded_analysis_metadata = Column(JSON, nullable=True)
     

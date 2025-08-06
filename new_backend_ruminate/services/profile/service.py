@@ -119,7 +119,11 @@ class ProfileService:
         
         # Extract and add theme keywords
         if dream.title or dream.summary:
-            keywords = self._extract_keywords(f"{dream.title or ''} {dream.summary or ''}")
+            dream_text = f"{dream.title or ''} {dream.summary or ''}"
+            keywords = self._extract_keywords(dream_text)
+            print(f"\n🔤 KEYWORD EXTRACTION DEBUG for dream {dream.id}:")
+            print(f"   Dream text: '{dream_text}'")
+            print(f"   Extracted keywords: {keywords}")
             summary.add_theme_keywords(keywords)
         
         # Extract and add emotions
@@ -185,6 +189,11 @@ class ProfileService:
             return profile
         
         # Calculate archetype based on dreams
+        print(f"\n📊 PROFILE CALCULATION DEBUG for user {user_id}:")
+        print(f"   Current archetype: {profile.archetype}")
+        print(f"   Dream count: {summary.dream_count}")
+        print(f"   Theme keywords accumulated: {summary.theme_keywords}")
+        
         archetype, confidence = self._calculate_archetype(summary.theme_keywords)
         if archetype:
             # If this is the first real calculation (replacing onboarding archetype)
@@ -196,6 +205,11 @@ class ProfileService:
             if profile.archetype and profile.archetype_metadata.get("source") == "onboarding":
                 metadata["previous_source"] = "onboarding"
                 metadata["previous_archetype"] = profile.archetype
+                print(f"   🔄 ARCHETYPE CHANGE: {profile.archetype} → {archetype}")
+            elif profile.archetype != archetype:
+                print(f"   🔄 ARCHETYPE CHANGE: {profile.archetype} → {archetype}")
+            else:
+                print(f"   ✅ ARCHETYPE UNCHANGED: {archetype}")
             
             profile.update_archetype(
                 archetype=archetype,
@@ -319,25 +333,37 @@ class ProfileService:
     
     def _calculate_archetype(self, theme_keywords: Dict[str, int]) -> tuple[Optional[str], float]:
         """Calculate archetype based on theme keywords."""
+        print(f"\n🔍 ARCHETYPE CALCULATION DEBUG:")
+        print(f"   Input keywords: {theme_keywords}")
+        
         if not theme_keywords:
+            print(f"   No keywords found, defaulting to 'analytical' with 85% confidence")
             return "analytical", 0.85  # Default with good confidence
         
         # Calculate scores for each archetype
         archetype_scores = {}
         total_keywords = sum(theme_keywords.values())
+        print(f"   Total keyword count: {total_keywords}")
         
         for archetype_name, archetype_data in ARCHETYPES.items():
             score = 0
+            matched_keywords = []
             for keyword in archetype_data["keywords"]:
                 # Check for exact match or substring
                 for theme_keyword, count in theme_keywords.items():
                     if keyword in theme_keyword or theme_keyword in keyword:
                         score += count
+                        matched_keywords.append(f"{theme_keyword}({count})")
             
             archetype_scores[archetype_name] = score
+            if matched_keywords:
+                print(f"   {archetype_name}: score={score}, matches={matched_keywords}")
+        
+        print(f"   Final scores: {archetype_scores}")
         
         # Find the best matching archetype
         if not any(archetype_scores.values()):
+            print(f"   No archetype matches found, defaulting to 'analytical' with 85% confidence")
             return "analytical", 0.85  # Default with good confidence
         
         best_archetype = max(archetype_scores, key=archetype_scores.get)
@@ -348,6 +374,7 @@ class ProfileService:
         raw_confidence = min(best_score / (total_keywords * 0.1), 1.0)
         confidence = 0.80 + (raw_confidence * 0.15)  # Maps 0->0.80, 1->0.95
         
+        print(f"   🎯 RESULT: {best_archetype} (score: {best_score}, confidence: {confidence:.1%})")
         return best_archetype, confidence
     
     def _calculate_emotional_landscape(self, emotion_counts: Dict[str, int]) -> List[EmotionalMetric]:

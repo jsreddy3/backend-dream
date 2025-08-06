@@ -45,6 +45,9 @@ class UserPreferences(Base):
     personality_traits = Column(JSON, default=dict, nullable=False)  # For AI prompt customization
     onboarding_completed = Column(Boolean, default=False, nullable=False)
     
+    # Onboarding journey tracking
+    onboarding_journey = Column(JSON, default=None, nullable=True)  # Complete onboarding interaction data
+    
     # Timestamps
     created_at = Column(DateTime, default=lambda: datetime.now(), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(), onupdate=lambda: datetime.now(), nullable=False)
@@ -72,6 +75,7 @@ class UserPreferences(Base):
             "initial_archetype": self.initial_archetype,
             "personality_traits": self.personality_traits,
             "onboarding_completed": self.onboarding_completed,
+            "onboarding_journey": self.onboarding_journey,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat()
         }

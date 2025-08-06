@@ -57,6 +57,7 @@ class DreamRead(DreamBase):
     analysis_generated_at: Optional[datetime]
     analysis_metadata: Optional[dict]
     expanded_analysis: Optional[str]
+    expanded_analysis_status: Optional[str]
     expanded_analysis_generated_at: Optional[datetime]
     expanded_analysis_metadata: Optional[dict]
     state: str

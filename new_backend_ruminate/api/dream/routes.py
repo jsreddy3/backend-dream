@@ -18,6 +18,7 @@ from new_backend_ruminate.dependencies import (
     get_dream_service,
     get_storage_service,
     get_current_user_id,
+    get_profile_service,
 )
 import time
 from sqlalchemy import text
@@ -195,7 +196,8 @@ async def get_upload_url(
 
 @router.post("/{did}/finish", response_model=DreamRead)
 async def finish_dream(
-    did: UUID, 
+    did: UUID,
+    tasks: BackgroundTasks,
     user_id: UUID = Depends(get_current_user_id), 
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session)
@@ -203,6 +205,10 @@ async def finish_dream(
     logger.info(f"Finish dream endpoint called for dream {did}")
     await svc.finish_dream(user_id, did)
     logger.info(f"Dream {did} finished, transcription and summary generation completed")
+    
+    # Queue background profile update
+    tasks.add_task(update_profile_after_dream, user_id, did)
+    logger.info(f"Queued profile update for user {user_id} after dream {did} completion")
     
     # Return the updated dream with generated title and summary
     dream = await svc.get_dream(user_id, did, db)
@@ -214,6 +220,7 @@ async def finish_dream(
 @router.post("/{did}/reprocess", response_model=DreamRead)
 async def reprocess_incomplete_dream(
     did: UUID,
+    tasks: BackgroundTasks,
     user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session)
@@ -237,6 +244,10 @@ async def reprocess_incomplete_dream(
     try:
         await svc.finish_dream(user_id, did)
         logger.info(f"Dream {did} reprocessed successfully")
+        
+        # Queue background profile update
+        tasks.add_task(update_profile_after_dream, user_id, did)
+        logger.info(f"Queued profile update for user {user_id} after dream {did} reprocessing")
         
         # Return the updated dream
         updated_dream = await svc.get_dream(user_id, did, db)
@@ -787,3 +798,30 @@ async def get_segments_status(
         "pending_count": len([s for s in segments_status if s["transcription_status"] == "pending"]),
         "segments": segments_status
     }
+
+# ───────────────────────────── Background Tasks ──────────────────────────────
+
+async def update_profile_after_dream(user_id: UUID, dream_id: UUID):
+    """Background task to update profile after dream completion."""
+    try:
+        from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
+        
+        logger.info(f"Starting background profile update for user {user_id} after dream {dream_id}")
+        
+        # Get services
+        profile_svc = get_profile_service()
+        dream_svc = get_dream_service()
+        
+        async with session_scope() as session:
+            # Get the completed dream
+            dream = await dream_svc.get_dream(user_id, dream_id, session)
+                
+            if dream and dream.summary:  # Only update if dream has been fully processed
+                await profile_svc.update_dream_summary_on_completion(user_id, dream, session)
+                logger.info(f"Successfully updated profile for user {user_id} after dream {dream_id} completion")
+            else:
+                logger.warning(f"Dream {dream_id} not found or not fully processed, skipping profile update")
+                
+    except Exception as e:
+        logger.error(f"Background profile update failed for user {user_id}, dream {dream_id}: {str(e)}")
+        # Don't raise - background tasks should not fail the main request

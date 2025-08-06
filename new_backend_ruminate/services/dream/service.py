@@ -818,6 +818,21 @@ Provide a focused interpretation in 100 words or less. Focus on the most signifi
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
         
+        # Try to atomically start expanded analysis generation
+        async with session_scope() as session:
+            acquired = await self._repo.try_start_expanded_analysis_generation(user_id, did, session)
+            if not acquired:
+                logger.info(f"Expanded analysis generation already in progress for dream {did}")
+                # Return the dream so caller can see current state
+                return await self._repo.get_dream(user_id, did, session)
+        
+        # Update status to processing
+        try:
+            async with session_scope() as session:
+                await self._repo.update_expanded_analysis_status(user_id, did, GenerationStatus.PROCESSING, session)
+        except Exception as e:
+            logger.error(f"Failed to update expanded analysis status to processing: {str(e)}")
+        
         # Get the dream and validate prerequisites
         dream = None
         transcript = None
@@ -921,6 +936,9 @@ Keep each section concise (2-3 sentences). Focus on new insights not covered in 
                     session
                 )
                 
+                # Mark as completed
+                await self._repo.update_expanded_analysis_status(user_id, did, GenerationStatus.COMPLETED, session)
+                
                 logger.info(f"Generated and saved expanded analysis for dream {did}")
                 logger.debug("Expanded analysis saved successfully")
                 return updated_dream
@@ -928,6 +946,14 @@ Keep each section concise (2-3 sentences). Focus on new insights not covered in 
         except Exception as e:
             logger.error(f"Failed to generate expanded analysis for dream {did}: {str(e)}")
             logger.debug(f"Error generating expanded analysis: {str(e)}")
+            
+            # Mark as failed
+            try:
+                async with session_scope() as session:
+                    await self._repo.update_expanded_analysis_status(user_id, did, GenerationStatus.FAILED, session)
+            except Exception as status_error:
+                logger.error(f"Failed to update expanded analysis status to failed: {str(status_error)}")
+            
             return None
 
     # ───────────────────────────── segments ──────────────────────────────── #

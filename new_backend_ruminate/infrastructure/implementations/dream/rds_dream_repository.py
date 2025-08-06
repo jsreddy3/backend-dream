@@ -261,12 +261,18 @@ class RDSDreamRepository(DreamRepository):
     
     async def update_summary_status(self, user_id: UUID, did: UUID, status: str, session: AsyncSession) -> Optional[Dream]:
         """Update the summary generation status."""
-        dream = await self.get_dream(user_id, did, session)
-        if dream:
-            dream.summary_status = status
-            await session.commit()
-            await session.refresh(dream)
-        return dream
+        stmt = (
+            update(Dream)
+            .where(Dream.id == did, Dream.user_id == user_id)
+            .values(summary_status=status)
+        )
+        result = await session.execute(stmt)
+        await session.commit()
+        
+        # Only fetch if update succeeded
+        if result.rowcount > 0:
+            return await self.get_dream(user_id, did, session)
+        return None
     
     async def try_start_summary_generation(self, user_id: UUID, did: UUID, session: AsyncSession) -> bool:
         """Atomically try to start summary generation. Returns True if successful, False if already in progress."""
@@ -331,12 +337,18 @@ class RDSDreamRepository(DreamRepository):
     
     async def update_analysis_status(self, user_id: UUID, did: UUID, status: str, session: AsyncSession) -> Optional[Dream]:
         """Update the analysis generation status."""
-        dream = await self.get_dream(user_id, did, session)
-        if dream:
-            dream.analysis_status = status
-            await session.commit()
-            await session.refresh(dream)
-        return dream
+        stmt = (
+            update(Dream)
+            .where(Dream.id == did, Dream.user_id == user_id)
+            .values(analysis_status=status)
+        )
+        result = await session.execute(stmt)
+        await session.commit()
+        
+        # Only fetch if update succeeded
+        if result.rowcount > 0:
+            return await self.get_dream(user_id, did, session)
+        return None
     
     async def try_start_analysis_generation(self, user_id: UUID, did: UUID, session: AsyncSession) -> bool:
         """Atomically try to start analysis generation. Returns True if successful, False if already in progress."""
@@ -362,6 +374,45 @@ class RDSDreamRepository(DreamRepository):
         await session.commit()
         
         # If we updated a row, we successfully acquired the lock
+        return result.rowcount > 0
+    
+    async def update_expanded_analysis_status(self, user_id: UUID, did: UUID, status: str, session: AsyncSession) -> Optional[Dream]:
+        """Update the expanded analysis generation status."""
+        stmt = (
+            update(Dream)
+            .where(Dream.id == did, Dream.user_id == user_id)
+            .values(expanded_analysis_status=status)
+        )
+        result = await session.execute(stmt)
+        await session.commit()
+        
+        # Only fetch if update succeeded
+        if result.rowcount > 0:
+            return await self.get_dream(user_id, did, session)
+        return None
+    
+    async def try_start_expanded_analysis_generation(self, user_id: UUID, did: UUID, session: AsyncSession) -> bool:
+        """Atomically try to start expanded analysis generation. Returns True if successful, False if already in progress."""
+        from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
+        
+        # Try to atomically update from None to PENDING
+        stmt = (
+            update(Dream)
+            .where(
+                and_(
+                    Dream.id == did,
+                    Dream.user_id == user_id,
+                    or_(
+                        Dream.expanded_analysis_status.is_(None),
+                        Dream.expanded_analysis_status == GenerationStatus.FAILED
+                    )
+                )
+            )
+            .values(expanded_analysis_status=GenerationStatus.PENDING)
+        )
+        
+        result = await session.execute(stmt)
+        await session.commit()
         return result.rowcount > 0
     
     # ───────────────────────── interpretation questions ────────────────────────── #
