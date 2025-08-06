@@ -30,6 +30,7 @@ class DreamThemeRead(BaseModel):
 
 class ProfileRead(BaseModel):
     """User profile response."""
+    name: Optional[str]
     archetype: Optional[str]
     archetype_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     statistics: ProfileStatistics

@@ -10,6 +10,7 @@ from new_backend_ruminate.dependencies import (
     get_session,
     get_profile_service,
     get_current_user_id,
+    get_user_repository,
 )
 from new_backend_ruminate.services.profile.service import ProfileService, ARCHETYPES
 from .schemas import ProfileRead, ProfileCalculateRequest, ProfileCalculateResponse
@@ -27,14 +28,21 @@ router = APIRouter(
 async def get_user_profile(
     user_id: UUID = Depends(get_current_user_id),
     svc: ProfileService = Depends(get_profile_service),
+    user_repo: "UserRepository" = Depends(get_user_repository),
     db: AsyncSession = Depends(get_session),
 ):
     """Get the current user's profile."""
+    # Get user info for name
+    user = await user_repo.get_by_id(user_id, db)
+    user_name = user.name if user else None
+    print(f"DEBUG: User ID: {user_id}, User Name: '{user_name}', User Email: {user.email if user else None}")
+    
     profile = await svc.get_user_profile(user_id, db)
     
     if not profile:
         # Return minimal profile if none exists yet
         return ProfileRead(
+            name=user_name,
             archetype=None,
             archetype_confidence=None,
             statistics={
@@ -59,6 +67,7 @@ async def get_user_profile(
         display_archetype = svc.ARCHETYPE_MIGRATION[profile.archetype]
     
     return ProfileRead(
+        name=user_name,
         archetype=display_archetype,
         archetype_confidence=profile.archetype_confidence,
         statistics={
