@@ -83,7 +83,7 @@ class ImageGenerationService:
         Generate an image and store it in S3
         
         Returns:
-            Tuple of (S3 URL, actual prompt used, error type) where error type can be:
+            Tuple of (S3 key, actual prompt used, error type) where error type can be:
             - None: Success
             - "content_policy_violation": Content was flagged
             - "error": Other error
@@ -120,11 +120,10 @@ class ImageGenerationService:
                 )
             )
             
-            # Generate presigned URL for reading
-            s3_url = await self.storage.generate_presigned_get_by_key(s3_key)
             logger.info(f"Image uploaded successfully to S3: {s3_key}")
             
-            return s3_url, prompt, None
+            # Return the S3 key instead of presigned URL
+            return s3_key, prompt, None
             
         except Exception as e:
             logger.error(f"Error in generate_and_store_image: {str(e)}")

@@ -48,6 +48,11 @@ class UserPreferences(Base):
     # Onboarding journey tracking
     onboarding_journey = Column(JSON, default=None, nullable=True)  # Complete onboarding interaction data
     
+    # Psychological profile data (extracted from onboarding for quick access)
+    horoscope_data = Column(JSON, nullable=True)  # {sign: "Leo", moon: "Cancer", rising: "Virgo", traits: [...]}
+    mbti_type = Column(String(4), nullable=True)  # "INTJ", "ENFP", etc.
+    ocean_scores = Column(JSON, nullable=True)  # {openness: 0.8, conscientiousness: 0.6, ...}
+    
     # Timestamps
     created_at = Column(DateTime, default=lambda: datetime.now(), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(), onupdate=lambda: datetime.now(), nullable=False)
@@ -76,6 +81,9 @@ class UserPreferences(Base):
             "personality_traits": self.personality_traits,
             "onboarding_completed": self.onboarding_completed,
             "onboarding_journey": self.onboarding_journey,
+            "horoscope_data": self.horoscope_data,
+            "mbti_type": self.mbti_type,
+            "ocean_scores": self.ocean_scores,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat()
         }

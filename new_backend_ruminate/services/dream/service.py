@@ -24,7 +24,7 @@ from new_backend_ruminate.domain.object_storage.repo import ObjectStorageReposit
 from new_backend_ruminate.domain.user.repo import UserRepository
 from new_backend_ruminate.domain.ports.transcription import TranscriptionService  # optional
 from new_backend_ruminate.domain.ports.llm import LLMService
-from new_backend_ruminate.dependencies import EventStreamHub
+from new_backend_ruminate.context.dream import DreamContextBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ class DreamService:
         self._summary_llm = summary_llm
         self._question_llm = question_llm
         self._analysis_llm = analysis_llm
+        self._context_builder = DreamContextBuilder(dream_repo)
 
     # ─────────────────────────────── dreams ──────────────────────────────── #
 
@@ -353,24 +354,21 @@ class DreamService:
         from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
         from new_backend_ruminate.domain.dream.entities.dream import GenerationStatus
         
-        # FIRST SESSION: Get initial dream data and close session
-        transcript = None
+        # Build context for title/summary generation
+        context_window = None
         async with session_scope() as session:
-            dream = await self._repo.get_dream(user_id, did, session)
-            if not dream:
-                logger.error(f"Dream {did} not found for user {user_id}")
+            context_window = await self._context_builder.build_for_title_summary(user_id, did, session)
+            if not context_window:
+                logger.error(f"Failed to build context for dream {did}")
                 await self._repo.update_summary_status(user_id, did, GenerationStatus.FAILED, session)
                 return None
-            
-            # Check if dream already has a transcript
-            transcript = dream.transcript
 
         # IF NO TRANSCRIPT: Wait WITHOUT any session open
-        if not transcript:
+        if not context_window.transcript:
             logger.info(f"No transcript yet for dream {did}, waiting for segment transcriptions...")
             transcript = await self._wait_for_transcription_and_consolidate(user_id, did)
             
-            # SECOND SESSION: Update dream with transcript or handle failure
+            # Update dream with transcript or handle failure
             if transcript:
                 async with session_scope() as session:
                     dream = await self._repo.get_dream(user_id, did, session)
@@ -378,8 +376,9 @@ class DreamService:
                         dream.transcript = transcript
                         await session.commit()
                         logger.info(f"Updated dream {did} with consolidated transcript")
+                        # Rebuild context with transcript
+                        context_window = await self._context_builder.build_for_title_summary(user_id, did, session)
                     else:
-                        # Edge case: dream was deleted while we were waiting
                         logger.error(f"Dream {did} no longer exists after waiting for transcription")
                         return None
             else:
@@ -390,32 +389,9 @@ class DreamService:
         
         logger.info(f"Generating title and summary for dream {did}")
         
-        # Prepare the prompt for the LLM
-        messages = [
-            {"role": "system", "content": "You are an intelligent, empathetic conversationalist who enjoys discussing dreams with people. Your job is to take the somewhat distended, self-referential, confusing ; sometimes incredibly short ; sometimes incredibly long dreams ; sometimes surprisingly clear dreams — and generate a comprehensive version of the dream that removes transcription artifacts, the users' back and forth telling, and other artifacts. NEVER fill in the blanks. NEVER get rid of or add events that don't happen. If it's a long dream, your version can be long—if it's short, it can be short. Your job is to simply make it reasonably clear. Include meaningful snippets of emotional retelling if they have already been provided, but do not exaggerate or truncate them... in fact, for emotions, get as close to the user's description as possible. Since your version is as close to the users' version as possible, it should be told how they told it 'I saw this...' etc"},
-            {"role": "user", "content": f"""Based on this dream transcript, create a short title and a clear summary. 
-
-Dream transcript:
-{transcript}
-
-Return a JSON object with 'title' and 'summary' fields."""}
-        ]
-        
-        # Define the JSON schema for the response
-        json_schema = {
-            "type": "object",
-            "properties": {
-                "title": {
-                    "type": "string",
-                    "description": "A short title (3-7 words) capturing the main theme"
-                },
-                "summary": {
-                    "type": "string", 
-                    "description": "A clear, factual summary of the dream events"
-                }
-            },
-            "required": ["title", "summary"]
-        }
+        # Prepare messages using context builder
+        messages = self._context_builder.prepare_llm_messages(context_window, "title_summary")
+        json_schema = self._context_builder.get_json_schema_for_task("title_summary")
         
         try:
             # JSV-428 FIX: External LLM call with NO database session open
@@ -511,22 +487,22 @@ Return a JSON object with 'title' and 'summary' fields."""}
         # Prepare the prompt
         messages = [
             {"role": "system", "content": """You are a dream interpretation assistant that helps users gain deeper insights into their dreams. 
-Your task is to generate thoughtful questions about specific elements of the dream that are necessary to understand the dream."""},
+          Your task is to generate thoughtful questions about specific elements of the dream that are necessary to understand the dream."""},
             {"role": "user", "content": f"""Based on this dream, generate {num_questions} insightful questions to help the dreamer explore its meaning.
 
-Dream transcript:
-{transcript}
+          Dream transcript:
+          {transcript}
 
-For each question, also provide {num_choices} possible answer options that you think the dreamer is likely to choose.
+          For each question, also provide {num_choices} possible answer options that you think the dreamer is likely to choose.
 
-Return a JSON array with this structure:
-[
-  {{
-    "question": "The question text",
-    "choices": ["First choice", "Second choice", "Third choice"]
-  }},
-  ...
-]"""}
+          Return a JSON array with this structure:
+          [
+            {{
+              "question": "The question text",
+              "choices": ["First choice", "Second choice", "Third choice"]
+            }},
+            ...
+          ]"""}
         ]
         
         # Define the JSON schema
@@ -682,14 +658,10 @@ Return a JSON array with this structure:
         except Exception as e:
             logger.error(f"Failed to update analysis status to processing: {str(e)}")
         
-        # Get the dream and all related data
-        dream = None
-        transcript = None
-        title = None
-        summary = None
-        additional_info = None
-        
+        # Build context for analysis generation
+        context_window = None
         async with session_scope() as session:
+            # Check if analysis already exists and not forcing regeneration
             dream = await self._repo.get_dream(user_id, did, session)
             if not dream:
                 logger.error(f"Dream {did} not found for user {user_id}")
@@ -698,7 +670,6 @@ Return a JSON array with this structure:
                 return None
             logger.debug(f"Dream found: {dream.title}")
             
-            # Check if analysis already exists and not forcing regeneration
             if dream.analysis and not force_regenerate:
                 logger.info(f"Analysis already exists for dream {did}, returning existing analysis")
                 logger.debug("Analysis already exists, returning existing")
@@ -729,39 +700,18 @@ Return a JSON array with this structure:
                     return None
             logger.debug(f"Transcript found: {len(dream.transcript)} characters")
             
-            # Extract all needed data while session is open
-            transcript = dream.transcript
-            title = dream.title
-            summary = dream.summary
-            additional_info = dream.additional_info
+            # Build context window with all available information
+            context_window = await self._context_builder.build_for_analysis(user_id, did, session)
+            if not context_window:
+                logger.error(f"Failed to build context for dream analysis {did}")
+                await self._repo.update_analysis_status(user_id, did, GenerationStatus.FAILED, session)
+                return None
             
         logger.info(f"Generating analysis for dream {did}")
         logger.debug("Starting LLM analysis generation")
         
-        # Build the comprehensive context
-        context_parts = []
-        
-        # 1. Basic dream information
-        context_parts.append(f"Dream Title: {title or 'Untitled'}")
-        context_parts.append(f"\nOriginal Dream Transcript:\n{transcript}")
-        
-        if summary:
-            context_parts.append(f"\nSummary:\n{summary}")
-        
-
-        # 3. Additional information
-        if additional_info:
-            context_parts.append(f"\nAdditional Context:\n{additional_info}")
-        
-        # Prepare the analysis prompt
-        messages = [
-            {"role": "system", "content": """You are an expert dream analyst who provides concise, insightful interpretations. Keep your analysis focused and under 100 words."""},
-            {"role": "user", "content": f"""Please provide a brief but insightful analysis of this dream:
-
-{chr(10).join(context_parts)}
-
-Provide a focused interpretation in 100 words or less. Focus on the most significant symbols and meanings."""}
-        ]
+        # Prepare messages using context builder
+        messages = self._context_builder.prepare_llm_messages(context_window, "analysis")
         
         try:
             # JSV-428 FIX: External LLM call with NO database session open
@@ -833,14 +783,8 @@ Provide a focused interpretation in 100 words or less. Focus on the most signifi
         except Exception as e:
             logger.error(f"Failed to update expanded analysis status to processing: {str(e)}")
         
-        # Get the dream and validate prerequisites
-        dream = None
-        transcript = None
-        title = None
-        summary = None
-        additional_info = None
-        existing_analysis = None
-        
+        # Build context for expanded analysis generation
+        context_window = None
         async with session_scope() as session:
             dream = await self._repo.get_dream(user_id, did, session)
             if not dream:
@@ -866,53 +810,18 @@ Provide a focused interpretation in 100 words or less. Focus on the most signifi
                 logger.debug("No initial analysis available")
                 return None
             
-            # Extract all needed data while session is open
-            transcript = dream.transcript
-            title = dream.title
-            summary = dream.summary
-            additional_info = dream.additional_info
-            existing_analysis = dream.analysis
+            # Build context window for expanded analysis
+            context_window = await self._context_builder.build_for_expanded_analysis(user_id, did, session)
+            if not context_window:
+                logger.error(f"Failed to build context for expanded analysis {did}")
+                await self._repo.update_expanded_analysis_status(user_id, did, GenerationStatus.FAILED, session)
+                return None
             
         logger.info(f"Generating expanded analysis for dream {did}")
         logger.debug("Starting expanded LLM analysis generation")
         
-        # Build the comprehensive context
-        context_parts = []
-        
-        # 1. Basic dream information
-        context_parts.append(f"Dream Title: {title or 'Untitled'}")
-        context_parts.append(f"\nOriginal Dream Transcript:\n{transcript}")
-        
-        if summary:
-            context_parts.append(f"\nSummary:\n{summary}")
-        
-        if additional_info:
-            context_parts.append(f"\nAdditional Context:\n{additional_info}")
-        
-        # Prepare the expanded analysis prompt
-        messages = [
-            {"role": "system", "content": """You are an expert dream analyst. You've already provided an initial interpretation. Now expand on it with deeper insights, exploring more symbolic meanings, psychological connections, and personal relevance. Format your response with clear sections."""},
-            {"role": "user", "content": f"""Here is the dream and your initial analysis:
-
-DREAM CONTEXT:
-{chr(10).join(context_parts)}
-
-YOUR INITIAL ANALYSIS:
-{existing_analysis}
-
-Provide an expanded analysis (150-200 words total) with these sections:
-
-## Symbolic Meanings
-Key symbols and their deeper significance
-
-## Psychological Patterns
-Connections to emotional states or life themes
-
-## Personal Relevance
-How this might relate to current life experiences
-
-Keep each section concise (2-3 sentences). Focus on new insights not covered in the initial analysis."""}
-        ]
+        # Prepare messages using context builder
+        messages = self._context_builder.prepare_llm_messages(context_window, "expanded_analysis")
         
         try:
             # Generate expanded analysis using the analysis LLM

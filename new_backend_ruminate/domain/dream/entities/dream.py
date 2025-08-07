@@ -56,7 +56,8 @@ class Dream(Base):
     video_completed_at = Column(DateTime, nullable=True)  # When generation completed
     
     # Image generation fields
-    image_url        = Column(String(500), nullable=True)  # S3 URL
+    image_url        = Column(String(500), nullable=True)  # S3 URL (deprecated, use image_s3_key)
+    image_s3_key     = Column(String(500), nullable=True)  # S3 key for generating fresh URLs
     image_prompt     = Column(Text, nullable=True)  # Generated prompt
     image_generated_at = Column(DateTime, nullable=True)  # When image was generated
     image_status     = Column(String(20), nullable=True)  # GenerationStatus enum

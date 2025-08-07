@@ -1,8 +1,8 @@
 # tests/conftest.py
 import os
-import tempfile
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from new_backend_ruminate.infrastructure.db import bootstrap
 from new_backend_ruminate.infrastructure.db.meta import Base
@@ -10,7 +10,6 @@ from new_backend_ruminate.config import settings as _settings
 import logging
 
 for name in (
-    "aiosqlite",
     "asyncio",              # selector_events etc.
     "sqlalchemy.pool",      # connection checkout/return
     "sqlalchemy.engine.Engine",  # SQL text if you ever set echo=True
@@ -22,27 +21,51 @@ logging.getLogger("new_backend_ruminate").setLevel(logging.INFO)
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
-async def sqlite_file_db():
+async def postgres_test_db():
     """
-    One per-session SQLite file that survives multiple connections, so every
-    AsyncSession sees the same schema and data.
+    Session-scoped Postgres test database.
+    Creates a separate test database to avoid affecting development data.
     """
-    tmp = tempfile.NamedTemporaryFile(suffix=".db")
-    os.environ["DB_URL"] = f"sqlite+aiosqlite:///{tmp.name}"
-
-    # purge cached settings so the new env var is respected
+    # Connect to main database to create test database
+    admin_engine = create_async_engine(
+        "postgresql+asyncpg://campfire:campfire@localhost:5433/campfire",
+        isolation_level="AUTOCOMMIT"
+    )
+    
+    async with admin_engine.begin() as conn:
+        # Drop and recreate test database
+        await conn.execute(text("DROP DATABASE IF EXISTS campfire_test"))
+        await conn.execute(text("CREATE DATABASE campfire_test"))
+    
+    await admin_engine.dispose()
+    
+    # Configure test database
+    os.environ["DB_URL"] = "postgresql+asyncpg://campfire:campfire@localhost:5433/campfire_test"
     _settings.cache_clear()
     cfg = _settings()
-
+    
     await bootstrap.init_engine(cfg)
-
-    async with bootstrap.engine.begin() as conn:          # type: ignore[arg-type]
+    
+    # Create all tables
+    async with bootstrap.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
+    
     yield
-
+    
+    # Cleanup
     await bootstrap.engine.dispose()
-    tmp.close()
+    
+    # Drop test database
+    async with admin_engine.begin() as conn:
+        await conn.execute(text("""
+            SELECT pg_terminate_backend(pg_stat_activity.pid)
+            FROM pg_stat_activity
+            WHERE pg_stat_activity.datname = 'campfire_test'
+            AND pid <> pg_backend_pid()
+        """))
+        await conn.execute(text("DROP DATABASE IF EXISTS campfire_test"))
+    
+    await admin_engine.dispose()
 
 
 @pytest_asyncio.fixture

@@ -40,17 +40,34 @@ router = APIRouter(
     prefix="/dreams",
 )
 
+# Helper function to generate fresh image URL
+async def refresh_image_url(dream, storage: ObjectStorageRepository, result: dict) -> dict:
+    """Generate fresh presigned URL for dream image if needed"""
+    if dream.image_s3_key and dream.image_status == "completed":
+        result['image_url'] = await storage.generate_presigned_get_by_key(dream.image_s3_key)
+    elif not dream.image_s3_key and dream.image_url:
+        # Keep legacy URL (may be expired)
+        result['image_url'] = dream.image_url
+    return result
+
 # ─────────────────────────────── dreams ─────────────────────────────── #
 
 @router.get("/", name="list_dreams")
 async def list_dreams(
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session),
-    user_id: UUID = Depends(get_current_user_id)
+    user_id: UUID = Depends(get_current_user_id),
+    storage: ObjectStorageRepository = Depends(get_storage_service),
 ):
     dreams = await svc.list_dreams(user_id, db)
     
-    result = [DreamRead.model_validate(dream).model_dump() for dream in dreams]
+    # Generate fresh URLs for images
+    result = []
+    for dream in dreams:
+        dream_dict = DreamRead.model_validate(dream).model_dump()
+        await refresh_image_url(dream, storage, dream_dict)
+        result.append(dream_dict)
+    
     return result
 
 @router.post("/", response_model=DreamRead, status_code=status.HTTP_201_CREATED)
@@ -68,11 +85,14 @@ async def read_dream(
     user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session),
+    storage: ObjectStorageRepository = Depends(get_storage_service),
 ):
     dream = await svc.get_dream(user_id, did, db)
     if not dream:
         raise HTTPException(404, "Dream not found")
     result = DreamRead.model_validate(dream).model_dump()
+    await refresh_image_url(dream, storage, result)
+        
     analysis = result.get('analysis')
     logger.debug(f"GET dream returning - has analysis: {analysis is not None}, analysis length: {len(analysis) if analysis else 0}")
     return result
@@ -84,6 +104,7 @@ async def update_dream(
     user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session),
+    storage: ObjectStorageRepository = Depends(get_storage_service),
 ):
     # Handle title and/or summary updates
     dream = None
@@ -99,7 +120,11 @@ async def update_dream(
     
     if not dream:
         raise HTTPException(404, "Dream not found")
-    return DreamRead.model_validate(dream).model_dump()
+        
+    result = DreamRead.model_validate(dream).model_dump()
+    await refresh_image_url(dream, storage, result)
+        
+    return result
 
 @router.delete("/{did}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_dream(
@@ -200,7 +225,8 @@ async def finish_dream(
     tasks: BackgroundTasks,
     user_id: UUID = Depends(get_current_user_id), 
     svc: DreamService = Depends(get_dream_service),
-    db: AsyncSession = Depends(get_session)
+    db: AsyncSession = Depends(get_session),
+    storage: ObjectStorageRepository = Depends(get_storage_service),
 ):
     logger.info(f"Finish dream endpoint called for dream {did}")
     await svc.finish_dream(user_id, did)
@@ -215,7 +241,9 @@ async def finish_dream(
     if not dream:
         raise HTTPException(404, "Dream not found")
     
-    return DreamRead.model_validate(dream).model_dump()
+    result = DreamRead.model_validate(dream).model_dump()
+    await refresh_image_url(dream, storage, result)
+    return result
 
 @router.post("/{did}/reprocess", response_model=DreamRead)
 async def reprocess_incomplete_dream(
@@ -223,7 +251,8 @@ async def reprocess_incomplete_dream(
     tasks: BackgroundTasks,
     user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
-    db: AsyncSession = Depends(get_session)
+    db: AsyncSession = Depends(get_session),
+    storage: ObjectStorageRepository = Depends(get_storage_service),
 ):
     """Reprocess an incomplete dream that has segments but no transcript."""
     logger.info(f"Reprocess dream endpoint called for dream {did}")
@@ -235,7 +264,9 @@ async def reprocess_incomplete_dream(
     
     if dream.transcript:
         logger.info(f"Dream {did} already has transcript, returning current state")
-        return DreamRead.model_validate(dream).model_dump()
+        result = DreamRead.model_validate(dream).model_dump()
+        await refresh_image_url(dream, storage, result)
+        return result
     
     if not dream.segments or len(dream.segments) == 0:
         raise HTTPException(400, "Dream has no segments to process")
@@ -254,7 +285,9 @@ async def reprocess_incomplete_dream(
         if not updated_dream:
             raise HTTPException(404, "Dream not found after processing")
         
-        return DreamRead.model_validate(updated_dream).model_dump()
+        result = DreamRead.model_validate(updated_dream).model_dump()
+        await refresh_image_url(updated_dream, storage, result)
+        return result
         
     except Exception as e:
         logger.error(f"Failed to reprocess dream {did}: {str(e)}")
@@ -546,6 +579,7 @@ async def generate_dream_image(
     user_id: UUID = Depends(get_current_user_id),
     svc: DreamService = Depends(get_dream_service),
     db: AsyncSession = Depends(get_session),
+    storage: ObjectStorageRepository = Depends(get_storage_service),
 ):
     """Generate an image for a dream"""
     from new_backend_ruminate.services.image_generation.service import ImageGenerationService
@@ -557,9 +591,21 @@ async def generate_dream_image(
         raise HTTPException(404, "Dream not found")
     
     # Check if image already exists
-    if dream.image_url and dream.image_status == GenerationStatus.COMPLETED.value:
+    if dream.image_status == GenerationStatus.COMPLETED.value:
+        if dream.image_s3_key:
+            # Generate fresh presigned URL from S3 key
+            fresh_url = await storage.generate_presigned_get_by_key(dream.image_s3_key)
+        elif dream.image_url:
+            # Legacy: use existing URL (may be expired)
+            fresh_url = dream.image_url
+        else:
+            # No image data found
+            dream.image_status = GenerationStatus.FAILED.value
+            await db.commit()
+            raise HTTPException(500, "Image marked as completed but no data found")
+            
         return {
-            "url": dream.image_url,
+            "url": fresh_url,
             "prompt": dream.image_prompt,
             "generated_at": dream.image_generated_at,
             "message": "Image already exists"
@@ -578,13 +624,13 @@ async def generate_dream_image(
         img_service = ImageGenerationService()
         prompt = f"Dreamlike artistic visualization of: {(dream.summary or dream.transcript)[:200]}"
         
-        s3_url, used_prompt, error_type = await img_service.generate_and_store_image(
+        s3_key, used_prompt, error_type = await img_service.generate_and_store_image(
             user_id=user_id,
             dream_id=did,
             prompt=prompt
         )
         
-        if not s3_url:
+        if not s3_key:
             if error_type == "content_policy_violation":
                 dream.image_status = "policy_violation"
                 await db.commit()
@@ -601,7 +647,7 @@ async def generate_dream_image(
                 raise HTTPException(500, "Failed to generate image")
         
         # Update dream with image info
-        dream.image_url = s3_url
+        dream.image_s3_key = s3_key
         dream.image_prompt = used_prompt
         dream.image_generated_at = datetime.utcnow()
         dream.image_status = GenerationStatus.COMPLETED.value
@@ -614,8 +660,11 @@ async def generate_dream_image(
         
         await db.commit()
         
+        # Generate fresh presigned URL for response
+        fresh_url = await storage.generate_presigned_get_by_key(s3_key)
+        
         return {
-            "url": dream.image_url,
+            "url": fresh_url,
             "prompt": dream.image_prompt,
             "generated_at": dream.image_generated_at,
             "message": "Image generated successfully"
