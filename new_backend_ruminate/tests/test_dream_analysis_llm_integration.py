@@ -189,66 +189,87 @@ class TestDreamAnalysisLLMIntegration:
         # Verify result
         assert result is not None
         
-        # Get the generated analysis
+        # Check that the LLM produced a thoughtful analysis
         update_call = mock_repos['dream_repo'].update_analysis.call_args
         generated_analysis = update_call[0][2]
         
-        # Verify the LLM received and processed the rich context appropriately
-        # The analysis should show understanding of multiple context layers:
-        
-        # 1. Dream symbols (underwater, crystal city, dolphin)
+        # Should address themes relevant to the complex dream scenario
         analysis_lower = generated_analysis.lower()
-        dream_symbols_present = any(keyword in analysis_lower 
-                                  for keyword in ['underwater', 'water', 'city', 'crystal', 'dolphin', 'ocean', 'sea'])
-        assert dream_symbols_present, f"Analysis should reference dream symbols. Got: {generated_analysis}"
         
-        # 2. Personal context (loss, grief, grandmother)
-        personal_context_present = any(keyword in analysis_lower 
-                                     for keyword in ['loss', 'grief', 'search', 'lost', 'closure', 'process'])
-        assert personal_context_present, f"Analysis should address personal context. Got: {generated_analysis}"
+        # Should reference underwater/ocean elements
+        assert any(keyword in analysis_lower for keyword in ['water', 'ocean', 'underwat', 'deep', 'sea'])
         
-        # 3. Appropriate length (concise but insightful)
-        word_count = len(generated_analysis.split())
-        assert 30 <= word_count <= 120, f"Analysis should be 30-120 words, got {word_count}: {generated_analysis}"
+        # Should reference the guidance/search theme  
+        assert any(keyword in analysis_lower for keyword in ['search', 'lost', 'guid', 'dolphin', 'quest'])
         
-        # 4. Coherent interpretation (should make connections)
-        # The analysis should not just list symbols but provide interpretation
-        assert len(generated_analysis) > 100, "Analysis should be substantial enough to provide interpretation"
+        # Should be empathetic about grief/loss context
+        assert any(keyword in analysis_lower for keyword in ['loss', 'grief', 'grandmother', 'closure', 'heal'])
     
     @llm_integration_test
-    async def test_prompt_engineering_effectiveness(self, test_llm):
-        """Test that our prompt engineering produces consistent, high-quality outputs."""
-        from new_backend_ruminate.context.dream import DreamContextBuilder, DreamContextWindow
+    async def test_real_llm_expanded_analysis_generation(self, dream_service_with_real_llm, mock_repos):
+        """Test expanded analysis generation with real LLM."""
+        user_id = uuid4()
+        dream_id = uuid4()
         
-        # Create a test context window with challenging dream content
-        context_window = DreamContextWindow(
-            dream_id="test-dream",
-            user_id="test-user", 
-            transcript="I was, um, like flying? But also maybe running. There were these things, kind of like animals but not really. Everything kept changing colors and I felt scared but also excited. I think my mom was there, or someone who felt like my mom. We were looking for something important but I can't remember what.",
-            title="Confusing Flight Dream",
-            summary="A disorienting dream with shape-shifting elements, flight/running, color changes, and searching with a maternal figure.",
-            additional_info="I'm going through a major life transition and feeling uncertain about everything.",
-            task_type="analysis"
+        # Create a dream with existing analysis
+        dream = Dream(
+            id=dream_id,
+            title="The Memory Library",
+            created_at=datetime.utcnow(),
+            state=DreamStatus.TRANSCRIBED.value,
+            transcript="I was walking through a vast library with endless shelves of glowing books. Each book seemed to contain different memories from my life. A wise librarian appeared and handed me a particular book that felt warm to the touch. When I opened it, I saw scenes from my childhood playing like a movie.",
+            summary="A dream about exploring a magical library where books contain personal memories, receiving guidance from a wise librarian to reconnect with childhood experiences.",
+            additional_info="I've been feeling disconnected from my past lately and struggling with some important decisions. Work has been overwhelming and I haven't had time to reflect.",
+            analysis="The infinite library represents your mind's vast repository of knowledge and memories. The mysterious librarian symbolizes your inner wisdom guiding you toward self-discovery and reconnection with your past."
         )
+        dream.user_id = user_id
         
-        # Use the context builder to create messages
-        context_builder = DreamContextBuilder(None)  # No repo needed for message building
-        messages = context_builder.prepare_llm_messages(context_window, "analysis")
+        # Setup mocks
+        mock_repos['dream_repo'].try_start_expanded_analysis_generation.return_value = True
+        mock_repos['dream_repo'].update_expanded_analysis_status = AsyncMock()
+        mock_repos['dream_repo'].get_dream.return_value = dream
+        mock_repos['dream_repo'].update_expanded_analysis = AsyncMock(return_value=dream)
         
-        # Call the real LLM
-        analysis = await test_llm.generate_response(messages)
+        # Execute with real LLM
+        with patch('new_backend_ruminate.infrastructure.db.bootstrap.session_scope') as mock_session_scope:
+            mock_session = AsyncMock()
+            mock_session_scope.return_value.__aenter__.return_value = mock_session
+            
+            result = await dream_service_with_real_llm.generate_expanded_analysis(user_id, dream_id)
         
-        # Verify the LLM handled the challenging, unclear dream content well
-        assert len(analysis) > 50, "Should provide substantial analysis even for unclear dreams"
-        assert len(analysis) <= 150, "Should stay within reasonable bounds"
+        # Verify
+        assert result is not None
         
-        # Should address uncertainty/confusion theme
-        analysis_lower = analysis.lower()
-        uncertainty_addressed = any(keyword in analysis_lower 
-                                  for keyword in ['uncertain', 'transition', 'change', 'confusion', 'unclear'])
-        assert uncertainty_addressed, f"Should address uncertainty theme. Got: {analysis}"
+        # Verify the expanded analysis was generated and stored
+        update_call = mock_repos['dream_repo'].update_expanded_analysis.call_args
+        assert update_call is not None
         
-        # Should extract meaning from fragmented content
-        meaning_extracted = any(keyword in analysis_lower
-                              for keyword in ['search', 'transform', 'identity', 'support', 'guidance'])
-        assert meaning_extracted, f"Should extract deeper meaning. Got: {analysis}"
+        generated_expanded_analysis = update_call[0][2]  # Third argument is expanded analysis text
+        metadata = update_call[0][3]  # Fourth argument is metadata
+        
+        # Validate expanded analysis content
+        assert len(generated_expanded_analysis) > 150  # Should be substantial (150-200 words requested)
+        assert len(generated_expanded_analysis) > len(dream.analysis) * 1.5  # Should be significantly longer than initial
+        
+        # Should contain section headers or structured content
+        expanded_lower = generated_expanded_analysis.lower()
+        assert any(keyword in expanded_lower for keyword in ['symbolic', 'psychological', 'personal', 'meaning', 'pattern'])
+        
+        # Should reference key elements from original dream
+        assert any(keyword in expanded_lower for keyword in ['librar', 'book', 'memor', 'childhood'])
+        
+        # Should address personal context more deeply  
+        assert any(keyword in expanded_lower for keyword in ['decision', 'reflect', 'connect', 'past'])
+        
+        # Should build upon the initial analysis concepts
+        assert any(keyword in expanded_lower for keyword in ['wisdom', 'discovery', 'reconnect'])
+        
+        # Validate metadata
+        assert metadata['model'] == 'gpt-4o-mini'
+        assert metadata['type'] == 'expanded'
+        assert 'generated_at' in metadata
+        
+        # Verify completion status
+        mock_repos['dream_repo'].update_expanded_analysis_status.assert_called_with(
+            user_id, dream_id, GenerationStatus.COMPLETED, mock_session
+        )

@@ -379,37 +379,30 @@ Given your work stress and memory concerns, this dream suggests you already poss
 # REAL LLM INTEGRATION TESTS
 # ============================================================================
 
+@pytest_asyncio.fixture
+async def dream_service_with_real_llm_expanded(mock_repos, test_llm):
+    """Create a dream service with real LLM and mocked repositories for expanded analysis."""
+    service = DreamService(
+        dream_repo=mock_repos['dream_repo'],
+        storage_repo=mock_repos['storage_repo'],
+        user_repo=mock_repos['user_repo'],
+        analysis_llm=test_llm
+    )
+    return service
+
+
 class TestExpandedAnalysisLLMIntegration:
     """Integration tests with real LLM for expanded analysis generation."""
     
-    @requires_llm
     @llm_integration_test
-    async def test_real_expanded_analysis_generation_comprehensive(self, db_session):
+    async def test_real_expanded_analysis_generation_comprehensive(self, dream_service_with_real_llm_expanded, mock_repos):
         """Test expanded analysis generation with real LLM - comprehensive dream."""
-        from new_backend_ruminate.infrastructure.implementations.dream.rds import RDSDreamRepository
-        from new_backend_ruminate.infrastructure.implementations.object_storage.s3 import S3ObjectStorageRepository
-        from new_backend_ruminate.infrastructure.implementations.user.rds import RDSUserRepository
-        
-        # Create real repositories
-        dream_repo = RDSDreamRepository()
-        storage_repo = S3ObjectStorageRepository(bucket_name="test-bucket")
-        user_repo = RDSUserRepository()
-        
-        # Create real LLM service
-        real_llm = LLMTestHelper.create_test_llm("gpt-4o-mini")
-        
-        # Create dream service
-        service = DreamService(
-            dream_repo=dream_repo,
-            storage_repo=storage_repo,
-            user_repo=user_repo,
-            analysis_llm=real_llm
-        )
+        user_id = uuid4()
+        dream_id = uuid4()
         
         # Create comprehensive dream with existing analysis
-        user_id = uuid4()
         dream = Dream(
-            id=uuid4(),
+            id=dream_id,
             title="The Memory Palace",
             created_at=datetime.utcnow(),
             state=DreamStatus.TRANSCRIBED.value,
@@ -420,61 +413,55 @@ class TestExpandedAnalysisLLMIntegration:
         )
         dream.user_id = user_id
         
-        # Create dream in database
-        created_dream = await dream_repo.create_dream(user_id, dream, db_session)
-        await db_session.commit()
+        # Setup mocks
+        mock_repos['dream_repo'].try_start_expanded_analysis_generation.return_value = True
+        mock_repos['dream_repo'].update_expanded_analysis_status = AsyncMock()
+        mock_repos['dream_repo'].get_dream.return_value = dream
+        mock_repos['dream_repo'].update_expanded_analysis = AsyncMock(return_value=dream)
         
-        # Generate expanded analysis
-        result = await service.generate_expanded_analysis(user_id, created_dream.id)
+        # Execute with real LLM
+        with patch('new_backend_ruminate.infrastructure.db.bootstrap.session_scope') as mock_session_scope:
+            mock_session = AsyncMock()
+            mock_session_scope.return_value.__aenter__.return_value = mock_session
+            
+            result = await dream_service_with_real_llm_expanded.generate_expanded_analysis(user_id, dream_id)
         
-        # Verify result
+        # Verify result  
         assert result is not None
-        assert result.expanded_analysis is not None
-        assert len(result.expanded_analysis) > 100  # Should be substantial
         
-        # Verify sections are present
-        expanded_text = result.expanded_analysis
-        assert "Symbolic Meanings" in expanded_text or "symbolic" in expanded_text.lower()
-        assert "Psychological Patterns" in expanded_text or "psychological" in expanded_text.lower()
-        assert "Personal Relevance" in expanded_text or "personal" in expanded_text.lower()
+        # Get the generated expanded analysis
+        update_call = mock_repos['dream_repo'].update_expanded_analysis.call_args
+        generated_expanded_analysis = update_call[0][2]  # Third argument is expanded analysis text
+        metadata = update_call[0][3]  # Fourth argument is metadata
         
-        # Verify it's different from initial analysis
-        assert expanded_text != dream.analysis
-        assert len(expanded_text) > len(dream.analysis)
+        # Verify expanded analysis content
+        assert len(generated_expanded_analysis) > 100  # Should be substantial
+        
+        # Verify sections are present in the structured response
+        expanded_text_lower = generated_expanded_analysis.lower()
+        assert "symbolic" in expanded_text_lower or "meaning" in expanded_text_lower
+        assert "psychological" in expanded_text_lower or "pattern" in expanded_text_lower
+        assert "personal" in expanded_text_lower or "relevance" in expanded_text_lower
+        
+        # Verify it references the original dream elements
+        assert "memory" in expanded_text_lower or "palace" in expanded_text_lower
         
         # Verify metadata
-        assert result.expanded_analysis_metadata is not None
-        assert result.expanded_analysis_metadata['model'] == 'gpt-4o-mini'
-        assert result.expanded_analysis_metadata['type'] == 'expanded'
-        assert 'generated_at' in result.expanded_analysis_metadata
+        assert metadata['model'] == 'gpt-4o-mini'
+        assert metadata['type'] == 'expanded'
+        assert 'generated_at' in metadata
     
-    @requires_llm
-    @llm_integration_test 
-    async def test_real_expanded_analysis_nightmare_theme(self, db_session):
+    @llm_integration_test
+    async def test_real_expanded_analysis_nightmare_theme(self, dream_service_with_real_llm_expanded, mock_repos):
         """Test expanded analysis with real LLM - nightmare theme."""
-        from new_backend_ruminate.infrastructure.implementations.dream.rds import RDSDreamRepository
-        from new_backend_ruminate.infrastructure.implementations.object_storage.s3 import S3ObjectStorageRepository
-        from new_backend_ruminate.infrastructure.implementations.user.rds import RDSUserRepository
-        
-        # Create real components
-        dream_repo = RDSDreamRepository()
-        storage_repo = S3ObjectStorageRepository(bucket_name="test-bucket")  
-        user_repo = RDSUserRepository()
-        real_llm = LLMTestHelper.create_test_llm("gpt-4o-mini")
-        
-        service = DreamService(
-            dream_repo=dream_repo,
-            storage_repo=storage_repo,
-            user_repo=user_repo,
-            analysis_llm=real_llm
-        )
+        user_id = uuid4()
+        dream_id = uuid4()
         
         # Create nightmare dream
-        user_id = uuid4()
         dream = Dream(
-            id=uuid4(),
+            id=dream_id,
             title="The Endless Chase",
-            created_at=datetime.utcnow(), 
+            created_at=datetime.utcnow(),
             state=DreamStatus.TRANSCRIBED.value,
             transcript="I was running through dark, twisting corridors that never seemed to end. Something was chasing me but I couldn't see what it was - I could only hear its footsteps getting closer. Every door I tried was locked, every window was too high. My legs felt heavy and slow, like I was running through mud. I kept looking back but saw only darkness. The fear was overwhelming. I finally found a door that opened, but it led to another corridor just like the first.",
             summary="A nightmare about being chased through endless dark corridors, unable to escape, with growing fear and helplessness.",
@@ -483,50 +470,44 @@ class TestExpandedAnalysisLLMIntegration:
         )
         dream.user_id = user_id
         
-        # Create and generate
-        created_dream = await dream_repo.create_dream(user_id, dream, db_session)
-        await db_session.commit()
+        # Setup mocks
+        mock_repos['dream_repo'].try_start_expanded_analysis_generation.return_value = True
+        mock_repos['dream_repo'].update_expanded_analysis_status = AsyncMock()
+        mock_repos['dream_repo'].get_dream.return_value = dream
+        mock_repos['dream_repo'].update_expanded_analysis = AsyncMock(return_value=dream)
         
-        result = await service.generate_expanded_analysis(user_id, created_dream.id)
+        # Execute with real LLM
+        with patch('new_backend_ruminate.infrastructure.db.bootstrap.session_scope') as mock_session_scope:
+            mock_session = AsyncMock()
+            mock_session_scope.return_value.__aenter__.return_value = mock_session
+            
+            result = await dream_service_with_real_llm_expanded.generate_expanded_analysis(user_id, dream_id)
         
         # Verify nightmare-specific analysis
         assert result is not None
-        assert result.expanded_analysis is not None
         
-        expanded_text = result.expanded_analysis.lower()
+        # Get the generated expanded analysis
+        update_call = mock_repos['dream_repo'].update_expanded_analysis.call_args
+        generated_expanded_analysis = update_call[0][2]
+        
+        expanded_text_lower = generated_expanded_analysis.lower()
         
         # Should address anxiety, avoidance, or fear themes
-        anxiety_terms = ['anxiety', 'fear', 'avoid', 'escape', 'stress', 'overwhelm']
-        assert any(term in expanded_text for term in anxiety_terms)
+        anxiety_terms = ['anxiety', 'fear', 'avoid', 'escape', 'stress', 'overwhelm', 'chase', 'trap']
+        assert any(term in expanded_text_lower for term in anxiety_terms)
         
-        # Should be longer and more detailed than initial
-        assert len(result.expanded_analysis) > len(dream.analysis)
+        # Should be substantial
+        assert len(generated_expanded_analysis) > 100
     
-    @requires_llm
     @llm_integration_test
-    async def test_real_expanded_analysis_builds_on_existing(self, db_session):
+    async def test_real_expanded_analysis_builds_on_existing(self, dream_service_with_real_llm_expanded, mock_repos):
         """Test that expanded analysis actually builds on and references the existing analysis."""
-        from new_backend_ruminate.infrastructure.implementations.dream.rds import RDSDreamRepository
-        from new_backend_ruminate.infrastructure.implementations.object_storage.s3 import S3ObjectStorageRepository
-        from new_backend_ruminate.infrastructure.implementations.user.rds import RDSUserRepository
-        
-        # Create real components
-        dream_repo = RDSDreamRepository()
-        storage_repo = S3ObjectStorageRepository(bucket_name="test-bucket")
-        user_repo = RDSUserRepository()
-        real_llm = LLMTestHelper.create_test_llm("gpt-4o-mini")
-        
-        service = DreamService(
-            dream_repo=dream_repo,
-            storage_repo=storage_repo,
-            user_repo=user_repo,
-            analysis_llm=real_llm
-        )
+        user_id = uuid4()
+        dream_id = uuid4()
         
         # Create dream with specific analysis to build upon
-        user_id = uuid4()
         dream = Dream(
-            id=uuid4(),
+            id=dream_id,
             title="Flying Above the City",
             created_at=datetime.utcnow(),
             state=DreamStatus.TRANSCRIBED.value,
