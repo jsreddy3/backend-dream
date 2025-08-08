@@ -60,7 +60,7 @@ Dream description:
     )
     
     # Calculate cost based on model
-    if config["model"] == "gpt-4o-mini":
+    if config["model"] == "gpt-5-mini":
         cost = (response.usage.prompt_tokens * 0.15 + response.usage.completion_tokens * 0.60) / 1_000_000
     else:
         cost = (response.usage.prompt_tokens * 5.00 + response.usage.completion_tokens * 15.00) / 1_000_000

@@ -13,7 +13,7 @@ from llm_test_utils import LLMTestHelper, requires_llm, llm_integration_test
 @pytest_asyncio.fixture
 async def real_llm():
     """Create a real OpenAI LLM service."""
-    return LLMTestHelper.create_test_llm("gpt-4o-mini")
+    return LLMTestHelper.create_test_llm("gpt-5-mini")
 
 
 @pytest_asyncio.fixture

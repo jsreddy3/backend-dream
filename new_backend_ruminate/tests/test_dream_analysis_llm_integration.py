@@ -145,7 +145,7 @@ class TestDreamAnalysisLLMIntegration:
         assert any(keyword in analysis_lower for keyword in ['reflect', 'decision', 'connect', 'childhood'])
         
         # Validate metadata
-        assert metadata['model'] == 'gpt-4o-mini'
+        assert metadata['model'] == 'gpt-5-mini'
         assert 'generated_at' in metadata
         
         # Verify completion status
@@ -265,7 +265,7 @@ class TestDreamAnalysisLLMIntegration:
         assert any(keyword in expanded_lower for keyword in ['wisdom', 'discovery', 'reconnect'])
         
         # Validate metadata
-        assert metadata['model'] == 'gpt-4o-mini'
+        assert metadata['model'] == 'gpt-5-mini'
         assert metadata['type'] == 'expanded'
         assert 'generated_at' in metadata
         

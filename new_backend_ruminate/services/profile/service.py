@@ -695,3 +695,7 @@ class ProfileService:
         confidence = 0.80 + (raw_confidence * 0.15)
         
         return best_archetype, confidence
+    
+    async def delete_user_account(self, user_id: UUID, user_repo: UserRepository, session: AsyncSession) -> None:
+        """Delete user account and all associated data."""
+        await user_repo.delete_user(user_id, session)

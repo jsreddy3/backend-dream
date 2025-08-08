@@ -15,24 +15,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from new_backend_ruminate.config import settings
 from new_backend_ruminate.infrastructure.sse.hub import EventStreamHub
-from new_backend_ruminate.infrastructure.implementations.conversation.rds_conversation_repository import RDSConversationRepository
 from new_backend_ruminate.infrastructure.implementations.dream.rds_dream_repository import RDSDreamRepository
 from new_backend_ruminate.infrastructure.implementations.object_storage.s3_storage_repository import S3StorageRepository
 from new_backend_ruminate.infrastructure.implementations.user.rds_user_repository import RDSUserRepository
 from new_backend_ruminate.infrastructure.implementations.user.profile_repository import SqlProfileRepository
 from new_backend_ruminate.infrastructure.implementations.checkin.rds_checkin_repository import RDSCheckInRepository
+# context builders
+from new_backend_ruminate.context.user.builder import UserProfileContextBuilder
+from new_backend_ruminate.context.dream.builder import DreamContextBuilder
 from new_backend_ruminate.infrastructure.llm.openai_llm import OpenAILLM
 from new_backend_ruminate.services.dream.service import DreamService
-from new_backend_ruminate.services.conversation.service import ConversationService
 from new_backend_ruminate.services.profile.service import ProfileService
 from new_backend_ruminate.services.checkin.service import CheckInService
+from new_backend_ruminate.services.astrology.birth_chart_service import BirthChartService
+from new_backend_ruminate.services.astrology.location_service import LocationService, COMMON_LOCATIONS
+from new_backend_ruminate.services.astrology.astrology_service import AstrologyService
 from new_backend_ruminate.infrastructure.transcription.deepgram import DeepgramTranscriptionService
 from new_backend_ruminate.infrastructure.transcription.whisper import WhisperTranscriptionService
 from new_backend_ruminate.infrastructure.transcription.gpt4o import GPT4oTranscriptionService
-from new_backend_ruminate.services.agent.service import AgentService
-from new_backend_ruminate.context.builder import ContextBuilder
 from new_backend_ruminate.infrastructure.db.bootstrap import get_session as get_db_session
-from new_backend_ruminate.context.renderers.agent import register_agent_renderers
 from new_backend_ruminate.infrastructure.celery.adapter import CeleryVideoQueueAdapter
 from new_backend_ruminate.domain.ports.video_queue import VideoQueuePort
 from jose import JWTError, jwt
@@ -41,12 +42,9 @@ from typing import AsyncGenerator
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-register_agent_renderers()
-
 # ────────────────────────── singletons ─────────────────────────── #
 
 _hub = EventStreamHub()
-_conversation_repo = RDSConversationRepository()
 _dream_repo = RDSDreamRepository()
 _user_repo = RDSUserRepository()
 _profile_repo = SqlProfileRepository()
@@ -68,14 +66,26 @@ _dream_analysis_llm = OpenAILLM(
     api_key=settings().openai_api_key,
     model=settings().dream_analysis_model,
 )
-_ctx_builder = ContextBuilder()
-_conversation_service = ConversationService(_conversation_repo, _llm, _hub, _ctx_builder)
-_agent_service = AgentService(_conversation_repo, _llm, _hub, _ctx_builder)
+# Fast mini model for location sanitization
+_location_sanitizer_llm = OpenAILLM(
+    api_key=settings().openai_api_key,
+    model="gpt-5-mini",
+)
 _storage_service = S3StorageRepository()
 _transcribe = GPT4oTranscriptionService()
-_dream_service = DreamService(_dream_repo, _storage_service, _user_repo, _transcribe, _hub, _dream_summary_llm, _dream_question_llm, _dream_analysis_llm)
+_dream_context_builder = DreamContextBuilder(_dream_repo)
+_user_context_builder = UserProfileContextBuilder(_profile_repo, _dream_repo, _checkin_repo)
+
+# Astrology services
+_location_service = LocationService(llm_service=_location_sanitizer_llm)
+# Pre-populate with common locations
+_location_service._location_cache.update(COMMON_LOCATIONS)
+_birth_chart_service = BirthChartService()
+_astrology_service = AstrologyService(_location_service, _birth_chart_service)
+
+_dream_service = DreamService(_dream_repo, _storage_service, _user_repo, _dream_context_builder, _transcribe, _dream_summary_llm, _dream_question_llm, _dream_analysis_llm)
 _profile_service = ProfileService(_profile_repo, _dream_analysis_llm)
-_checkin_service = CheckInService(_checkin_repo, _dream_repo, _user_repo, _dream_analysis_llm)
+_checkin_service = CheckInService(_checkin_repo, _dream_repo, _user_repo, _user_context_builder, _dream_analysis_llm)
 _video_queue = CeleryVideoQueueAdapter()
 
 # ─────────────────────── DI provider helpers ───────────────────── #
@@ -84,26 +94,11 @@ def get_event_hub() -> EventStreamHub:
     """Return the process-wide in-memory hub (singleton)."""
     return _hub
 
-def get_context_builder() -> ContextBuilder:
-    """Return the singleton ContextBuilder; stateless, safe to share."""
-    return _ctx_builder
-
-def get_conversation_service() -> ConversationService:
-    """Return the singleton ConversationService; stateless, safe to share."""
-    return _conversation_service
-
 def get_dream_service() -> DreamService:
     return _dream_service
 
-def get_agent_service() -> AgentService:
-    """Return the singleton AgentService; stateless, safe to share."""
-    return _agent_service
-
 def get_user_repository() -> RDSUserRepository:
     return _user_repo
-
-def get_conversation_repository() -> RDSConversationRepository:
-    return _conversation_repo
 
 def get_dream_repository() -> RDSDreamRepository:
     return _dream_repo
@@ -137,6 +132,22 @@ def get_profile_service() -> ProfileService:
 def get_checkin_service() -> CheckInService:
     """Return the singleton CheckInService."""
     return _checkin_service
+
+def get_location_service() -> LocationService:
+    """Return the singleton LocationService with LLM-powered sanitization."""
+    return _location_service
+
+def get_birth_chart_service() -> BirthChartService:
+    """Return the singleton BirthChartService."""
+    return _birth_chart_service
+
+def get_location_sanitizer_llm() -> OpenAILLM:
+    """Return the fast LLM instance for location sanitization."""
+    return _location_sanitizer_llm
+
+def get_astrology_service() -> AstrologyService:
+    """Return the singleton AstrologyService with full pipeline."""
+    return _astrology_service
 
 # ───────────────────────── auth helpers ───────────────────────── #
 _security = HTTPBearer()

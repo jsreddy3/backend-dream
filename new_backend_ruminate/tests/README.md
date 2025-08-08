@@ -95,9 +95,9 @@ Tests automatically load from `/Users/jaidenreddy/Documents/projects/all_dreams/
 ## Fixtures Available
 
 - `db_session` - PostgreSQL session with auto-rollback
-- `test_llm` - Real OpenAI LLM (gpt-4o-mini)
-- `test_llm_fast` - gpt-4o-mini
-- `test_llm_smart` - gpt-4o
+- `test_llm` - Real OpenAI LLM (gpt-5-mini)
+- `test_llm_fast` - gpt-5-mini
+- `test_llm_smart` - gpt-5
 - `all_test_llms` - Dict of all LLM variants
 
 ## Decorators

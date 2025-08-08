@@ -15,7 +15,7 @@ from llm_test_utils import LLMTestHelper, llm_integration_test, test_llm
 class MockLLMService:
     """Mock LLM service for testing."""
     
-    def __init__(self, model="gpt-4o-mini"):
+    def __init__(self, model="gpt-5-mini"):
         self._model = model
         self.generate_response = AsyncMock()
         self.generate_structured_response = AsyncMock()
@@ -126,7 +126,7 @@ Given your work stress and memory concerns, this dream suggests you already poss
         # Verify repository calls
         mock_repos['dream_repo'].update_expanded_analysis.assert_called_once_with(
             user_id, dream_id, expected_expanded_analysis,
-            {'model': 'gpt-4o-mini', 'generated_at': mock_repos['dream_repo'].update_expanded_analysis.call_args[0][3]['generated_at'], 'type': 'expanded'},
+            {'model': 'gpt-5-mini', 'generated_at': mock_repos['dream_repo'].update_expanded_analysis.call_args[0][3]['generated_at'], 'type': 'expanded'},
             mock_session
         )
         mock_repos['dream_repo'].update_expanded_analysis_status.assert_called_with(
@@ -380,7 +380,7 @@ class TestExpandedAnalysisLLMIntegration:
         assert personal_refs >= 1, f"Should address personal context. Found: {personal_refs} in: {generated_expanded_analysis}"
         
         # Verify metadata
-        assert metadata['model'] == 'gpt-4o-mini'
+        assert metadata['model'] == 'gpt-5-mini'
         assert metadata['type'] == 'expanded'
         assert 'generated_at' in metadata
     

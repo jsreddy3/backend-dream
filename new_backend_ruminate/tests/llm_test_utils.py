@@ -34,7 +34,7 @@ class LLMTestHelper:
         return api_key
     
     @staticmethod
-    def create_test_llm(model: str = "gpt-4o-mini") -> OpenAILLM:
+    def create_test_llm(model: str = "gpt-5-mini") -> OpenAILLM:
         """Create a test LLM instance with the correct API key."""
         api_key = LLMTestHelper.skip_if_no_api_key()
         return OpenAILLM(model=model, api_key=api_key)
@@ -44,9 +44,9 @@ class LLMTestHelper:
         """Create all common LLM variants for testing."""
         api_key = LLMTestHelper.skip_if_no_api_key()
         return {
-            "mini": OpenAILLM(model="gpt-4o-mini", api_key=api_key),
-            "standard": OpenAILLM(model="gpt-4o", api_key=api_key),
-            "turbo": OpenAILLM(model="gpt-3.5-turbo", api_key=api_key),
+            "mini": OpenAILLM(model="gpt-5-mini", api_key=api_key),
+            "standard": OpenAILLM(model="gpt-5", api_key=api_key),
+            "turbo": OpenAILLM(model="gpt-5-nano", api_key=api_key),
         }
 
 
@@ -64,13 +64,13 @@ def test_llm():
 @pytest.fixture
 def test_llm_fast():
     """Pytest fixture for fastest/cheapest LLM."""
-    return LLMTestHelper.create_test_llm("gpt-4o-mini")
+    return LLMTestHelper.create_test_llm("gpt-5-mini")
 
 
 @pytest.fixture
 def test_llm_smart():
     """Pytest fixture for most capable LLM."""
-    return LLMTestHelper.create_test_llm("gpt-4o")
+    return LLMTestHelper.create_test_llm("gpt-5")
 
 
 @pytest.fixture
@@ -94,7 +94,7 @@ def llm_integration_test(func):
 
 
 # Quick test helpers
-async def quick_llm_test(prompt: str, model: str = "gpt-4o-mini") -> str:
+async def quick_llm_test(prompt: str, model: str = "gpt-5-mini") -> str:
     """Quick function to test an LLM with a simple prompt."""
     llm = LLMTestHelper.create_test_llm(model)
     messages = [{"role": "user", "content": prompt}]
@@ -104,7 +104,7 @@ async def quick_llm_test(prompt: str, model: str = "gpt-4o-mini") -> str:
 async def quick_structured_llm_test(
     prompt: str, 
     json_schema: Dict[str, Any], 
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5-mini"
 ) -> Dict[str, Any]:
     """Quick function to test structured LLM output."""
     llm = LLMTestHelper.create_test_llm(model)

@@ -20,7 +20,7 @@ from llm_test_utils import LLMTestHelper
 class MockLLMService:
     """Mock LLM service for testing."""
     
-    def __init__(self, model="gpt-4o-mini"):
+    def __init__(self, model="gpt-5-mini"):
         self._model = model
         self.generate_response = AsyncMock()
         self.generate_structured_response = AsyncMock()
@@ -169,7 +169,7 @@ class TestGenerateAnalysis:
         # Verify repository calls
         mock_repos['dream_repo'].update_analysis.assert_called_once_with(
             user_id, dream_id, expected_analysis, 
-            {'model': 'gpt-4o-mini', 'generated_at': mock_repos['dream_repo'].update_analysis.call_args[0][3]['generated_at']},
+            {'model': 'gpt-5-mini', 'generated_at': mock_repos['dream_repo'].update_analysis.call_args[0][3]['generated_at']},
             mock_session
         )
         mock_repos['dream_repo'].update_analysis_status.assert_called_with(
@@ -303,7 +303,7 @@ class TestGenerateAnalysis:
         mock_llm.generate_response.assert_called_once()
         mock_repos['dream_repo'].update_analysis.assert_called_once_with(
             user_id, dream_id, new_analysis, 
-            {'model': 'gpt-4o-mini', 'generated_at': mock_repos['dream_repo'].update_analysis.call_args[0][3]['generated_at']},
+            {'model': 'gpt-5-mini', 'generated_at': mock_repos['dream_repo'].update_analysis.call_args[0][3]['generated_at']},
             mock_session
         )
     
@@ -623,7 +623,7 @@ class TestGenerateAnalysis:
         call_args = mock_repos['dream_repo'].update_analysis.call_args[0]
         metadata = call_args[3]  # Fourth argument is metadata
         
-        assert metadata['model'] == 'gpt-4o-mini'
+        assert metadata['model'] == 'gpt-5-mini'
         assert 'generated_at' in metadata
         assert isinstance(metadata['generated_at'], str)  # ISO format timestamp
     

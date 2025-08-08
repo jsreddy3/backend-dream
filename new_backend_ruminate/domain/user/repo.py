@@ -17,3 +17,6 @@ class UserRepository(ABC):
 
     @abstractmethod
     async def get_by_sub(self, sub: str, session: AsyncSession) -> Optional[User]: ...
+
+    @abstractmethod
+    async def delete_user(self, user_id: UUID, session: AsyncSession) -> None: ...

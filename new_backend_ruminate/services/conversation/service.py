@@ -14,8 +14,7 @@ from new_backend_ruminate.infrastructure.sse.hub import EventStreamHub
 from new_backend_ruminate.domain.ports.llm import LLMService
 from new_backend_ruminate.infrastructure.db.bootstrap import session_scope
 from new_backend_ruminate.domain.conversation.entities.conversation import Conversation
-from new_backend_ruminate.context.builder import ContextBuilder
-from new_backend_ruminate.context.prompts import agent_system_prompt, default_system_prompts
+from new_backend_ruminate.context.dream.builder import DreamContextBuilder
 from new_backend_ruminate.domain.ports.tool import tool_registry
 
 class ConversationService:
@@ -26,7 +25,7 @@ class ConversationService:
         repo: ConversationRepository,
         llm: LLMService,
         hub: EventStreamHub,
-        ctx_builder: ContextBuilder,
+        ctx_builder: DreamContextBuilder,
     ) -> None:
         self._repo = repo
         self._llm = llm

@@ -47,3 +47,14 @@ class RDSUserRepository(UserRepository):
     async def get_by_sub(self, sub: str, session: AsyncSession) -> Optional[User]:
         result = await session.execute(select(User).where(User.google_sub == sub))
         return result.scalars().first()
+
+    async def delete_user(self, user_id: UUID, session: AsyncSession) -> None:
+        """Delete a user and cascade delete all related data."""
+        from sqlalchemy import text
+        
+        # Delete in order respecting foreign key constraints
+        await session.execute(text("DELETE FROM user_preferences WHERE user_id = :user_id"), {"user_id": user_id})
+        await session.execute(text("DELETE FROM user_profiles WHERE user_id = :user_id"), {"user_id": user_id})
+        await session.execute(text("DELETE FROM dream_summaries WHERE user_id = :user_id"), {"user_id": user_id})
+        await session.execute(text("DELETE FROM dreams WHERE user_id = :user_id"), {"user_id": user_id})
+        await session.execute(text("DELETE FROM users WHERE id = :user_id"), {"user_id": user_id})

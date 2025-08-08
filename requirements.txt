@@ -40,3 +40,6 @@ psutil
 google-auth>=2.28
 google-auth-oauthlib>=1.1
 python-jose[cryptography]>=3.3
+kerykeion>=4.0
+pytz
+requests>=2.31.0

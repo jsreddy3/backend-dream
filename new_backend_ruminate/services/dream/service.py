@@ -35,8 +35,8 @@ class DreamService:
         dream_repo: DreamRepository,
         storage_repo: ObjectStorageRepository,
         user_repo: UserRepository,
+        ctx_builder: DreamContextBuilder,
         transcription_svc: Optional[TranscriptionService] = None,
-        event_hub: Optional[EventStreamHub] = None,
         summary_llm: Optional[LLMService] = None,
         question_llm: Optional[LLMService] = None,
         analysis_llm: Optional[LLMService] = None,
@@ -45,11 +45,10 @@ class DreamService:
         self._storage = storage_repo
         self._user_repo = user_repo
         self._transcribe = transcription_svc
-        self._hub = event_hub
         self._summary_llm = summary_llm
         self._question_llm = question_llm
         self._analysis_llm = analysis_llm
-        self._context_builder = DreamContextBuilder(dream_repo)
+        self._context_builder = ctx_builder
 
     # ─────────────────────────────── dreams ──────────────────────────────── #
 
@@ -97,8 +96,10 @@ class DreamService:
                     return None
                 
                 if not dream.segments:
-                    logger.warning(f"Dream {did} has no segments")
-                    return ""  # Return empty string for dreams with no segments
+                    # No segments yet; keep waiting within timeout window instead of returning empty transcript
+                    logger.debug(f"Dream {did} has no segments yet; waiting for first segment")
+                    # Skip completion checks this iteration
+                    pass
                 
                 # Check transcription status of all segments
                 pending_segments = []
@@ -119,27 +120,31 @@ class DreamService:
                     elif status == "completed":
                         completed_segments.append(i)
                 
-                # Check if all segments are done (no pending or processing)
-                if not pending_segments and not processing_segments:
-                    # Check if any failed
-                    if failed_segments:
-                        logger.error(f"Dream {did} has {len(failed_segments)} failed segment(s): {failed_segments}")
-                        # Continue with partial transcripts rather than failing completely
-                    
-                    # Sort segments by order and concatenate transcripts
-                    sorted_segments = sorted(dream.segments, key=lambda s: s.order)
-                    transcript_parts = []
-                    
-                    for seg in sorted_segments:
-                        if seg.transcript:
-                            transcript_parts.append(seg.transcript)
-                    
-                    # Join transcripts with space
-                    combined_transcript = " ".join(transcript_parts)
-                    logger.info(f"Combined {len(transcript_parts)} segment transcripts into dream transcript")
-                    return combined_transcript
+                # If there are no segments yet, continue waiting
+                if not dream.segments:
+                    logger.debug(f"Waiting for first segment to be created...")
                 else:
-                    logger.debug(f"Waiting for transcription... {len(pending_segments)} pending, {len(processing_segments)} processing")
+                    # Check if all segments are done (no pending or processing)
+                    if not pending_segments and not processing_segments:
+                        # Check if any failed
+                        if failed_segments:
+                            logger.error(f"Dream {did} has {len(failed_segments)} failed segment(s): {failed_segments}")
+                            # Continue with partial transcripts rather than failing completely
+                        
+                        # Sort segments by order and concatenate transcripts
+                        sorted_segments = sorted(dream.segments, key=lambda s: s.order)
+                        transcript_parts = []
+                        
+                        for seg in sorted_segments:
+                            if seg.transcript:
+                                transcript_parts.append(seg.transcript)
+                        
+                        # Join transcripts with space
+                        combined_transcript = " ".join(transcript_parts)
+                        logger.info(f"Combined {len(transcript_parts)} segment transcripts into dream transcript")
+                        return combined_transcript
+                    else:
+                        logger.debug(f"Waiting for transcription... {len(pending_segments)} pending, {len(processing_segments)} processing")
             
             await asyncio.sleep(check_interval)
             waited += check_interval
@@ -984,9 +989,11 @@ class DreamService:
             else:
                 # No segments or failed to get transcript
                 if not dream.segments:
-                    raise ValueError(f"Dream {did} has no segments")
+                    logger.warning(f"Dream {did} has no segments after waiting; leaving state unchanged")
                 else:
-                    raise ValueError(f"Failed to get transcript for dream {did}")
+                    logger.error(f"Failed to get transcript for dream {did} despite having {len(dream.segments)} segment(s)")
+                # Return gracefully; caller may retry later
+                return
                 
         # Note: Summary generation is now handled after this method returns
         
@@ -1149,16 +1156,6 @@ class DreamService:
                     # update_segment_transcript now sets status to 'completed' automatically
                     await self._repo.update_segment_transcript(user_id, did, sid, transcript, session)
                     logger.info(f"Updated segment {sid} transcript (length: {len(transcript)}) and status to completed")
-                    
-                if self._hub:
-                    await self._hub.publish(
-                        stream_id=did,
-                        chunk=json.dumps({
-                            "segment_id": str(sid),
-                            "transcript": transcript,
-                        })
-                    )
-                    logger.info(f"Published transcript to event hub for segment {sid}")
             else:
                 # Only mark as failed if transcript is None (actual failure)
                 logger.error(f"Transcription returned None for segment {sid}, marking as failed")

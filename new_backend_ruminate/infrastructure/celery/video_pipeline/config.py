@@ -16,7 +16,7 @@ def load_config() -> Dict[str, Any]:
                 "min_scenes": 1,
                 "max_scenes": 2,
                 "scene_duration_seconds": 5,
-                "model": "gpt-4o-mini",
+                "model": "gpt-5-mini",
                 "temperature": 0.7,
             },
             "image_generation": {
@@ -49,12 +49,12 @@ def load_config() -> Dict[str, Any]:
             "s3_region": settings().aws_region,
         },
         "models": {
-            "parser": "gpt-4o-mini",
+            "parser": "gpt-5-mini",
             "image": "dall-e-2",  # Options: dall-e-2, dall-e-3, gpt-4
-            "audio": "gpt-4o-mini",
+            "audio": "gpt-5-mini",
         },
         "costs": {
-            "gpt-4o-mini": {"input": 0.150, "output": 0.600},  # per 1M tokens
+            "gpt-5-mini": {"input": 0.150, "output": 0.600},  # per 1M tokens
             "dall-e-2": 0.020,  # per image
             "dall-e-3": 0.040,  # per image
             "tts": 0.015,  # per 1K characters

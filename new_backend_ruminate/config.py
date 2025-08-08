@@ -49,7 +49,7 @@ class _Settings(BaseSettings):
     # LLM provider                                                       #
     # ------------------------------------------------------------------ #
     openai_api_key: str
-    openai_model: str = "gpt-4o"
+    openai_model: str = "gpt-5"
     
     # Dream-specific LLM models (required, no fallback)
     dream_summary_model: str = Field(..., alias="DREAM_SUMMARY_MODEL")

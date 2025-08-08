@@ -182,7 +182,7 @@ async def generate_gpt_image_1_images(scenes_data: ScenesData, output_dir: Path)
     # Must be sequential for context continuity
     for scene in scenes_data.scenes:
         response = await client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             input=scene.visual_prompt,
             previous_response_id=prev_response_id,
             tools=[{
